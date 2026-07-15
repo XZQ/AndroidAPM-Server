@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package apm.proto;
+
+// This compatibility schema mirrors AndroidAPM/apm-model exactly. The wire
+// payload is a sequence of 4-byte big-endian lengths followed by this message.
+message ApmEventMessage {
+  int64 timestamp = 1;
+  string module = 2;
+  string name = 3;
+  string kind = 4;
+  string severity = 5;
+  string process_name = 6;
+  string thread_name = 7;
+  string scene = 8;
+  bool foreground = 9;
+  map<string, string> fields = 10;
+  map<string, string> global_context = 11;
+  map<string, string> extras = 12;
+  string priority = 13;
+  string event_id = 14;
+}

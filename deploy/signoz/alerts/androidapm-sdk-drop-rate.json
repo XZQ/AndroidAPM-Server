@@ -1,0 +1,51 @@
+{
+  "alert": "AndroidAPM SDK drop rate high",
+  "ruleType": "threshold_rule",
+  "alertType": "LOGS_BASED_ALERT",
+  "condition": {
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0.01,
+          "matchType": "5",
+          "op": "1",
+          "channels": []
+        }
+      ]
+    },
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "logs",
+            "aggregations": [{ "expression": "p95(android.apm.field.dropRate)" }],
+            "filter": { "expression": "android.apm.name = 'sdk_health_report'" }
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A"
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": { "evalWindow": "15m0s", "frequency": "1m0s" }
+  },
+  "labels": { "component": "androidapm-sdk", "severity": "warning" },
+  "annotations": {
+    "summary": "AndroidAPM SDK event drop ratio exceeds 1%",
+    "description": "P95 drop ratio is {{$value}}. Confirm sample size and route by app/version before production use."
+  },
+  "notificationSettings": {
+    "groupBy": ["service.name", "service.version"],
+    "usePolicy": true,
+    "renotify": { "enabled": false, "interval": "30m", "alertStates": [] }
+  },
+  "version": "v5",
+  "schemaVersion": "v2alpha1"
+}

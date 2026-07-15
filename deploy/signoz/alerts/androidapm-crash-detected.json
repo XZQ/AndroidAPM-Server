@@ -1,0 +1,51 @@
+{
+  "alert": "AndroidAPM crash detected",
+  "ruleType": "threshold_rule",
+  "alertType": "LOGS_BASED_ALERT",
+  "condition": {
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "target": 0,
+          "matchType": "5",
+          "op": "1",
+          "channels": []
+        }
+      ]
+    },
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "logs",
+            "aggregations": [{ "expression": "count()" }],
+            "filter": { "expression": "android.apm.module = 'crash'" }
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A"
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": { "evalWindow": "5m0s", "frequency": "1m0s" }
+  },
+  "labels": { "component": "androidapm", "severity": "critical" },
+  "annotations": {
+    "summary": "AndroidAPM observed one or more crash events",
+    "description": "Crash count in the evaluation window is {{$value}}. Filter by app, environment and version before routing this template in production."
+  },
+  "notificationSettings": {
+    "groupBy": ["service.name", "deployment.environment.name"],
+    "usePolicy": true,
+    "renotify": { "enabled": false, "interval": "30m", "alertStates": [] }
+  },
+  "version": "v5",
+  "schemaVersion": "v2alpha1"
+}

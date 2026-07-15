@@ -1,0 +1,241 @@
+{
+  "schemaVersion": "v6",
+  "name": "androidapm-overview",
+  "tags": [],
+  "spec": {
+    "display": {
+      "name": "AndroidAPM Overview",
+      "description": "Android client health, crashes, ANRs, startup and recent high-severity events"
+    },
+    "duration": "6h",
+    "datasources": {
+      "SigNozDatasource": {
+        "default": true,
+        "plugin": {
+          "kind": "signoz/Datasource",
+          "spec": {}
+        }
+      }
+    },
+    "variables": [
+      {
+        "kind": "ListVariable",
+        "spec": {
+          "name": "app",
+          "display": { "name": "App" },
+          "allowAllValue": true,
+          "allowMultiple": true,
+          "sort": "alphabetical-asc",
+          "plugin": {
+            "kind": "signoz/DynamicVariable",
+            "spec": { "name": "service.name", "signal": "logs" }
+          }
+        }
+      },
+      {
+        "kind": "ListVariable",
+        "spec": {
+          "name": "environment",
+          "display": { "name": "Environment" },
+          "allowAllValue": true,
+          "allowMultiple": true,
+          "sort": "alphabetical-asc",
+          "plugin": {
+            "kind": "signoz/DynamicVariable",
+            "spec": { "name": "deployment.environment.name", "signal": "logs" }
+          }
+        }
+      }
+    ],
+    "panels": {
+      "event-count": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "Events", "description": "All accepted AndroidAPM events" },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": { "formatting": { "unit": "none", "decimalPrecision": "0" } }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "logs",
+                    "aggregations": [{ "expression": "count()" }],
+                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment" }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "crash-count": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "Crashes", "description": "Java and Native crash events" },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "formatting": { "unit": "none", "decimalPrecision": "0" },
+              "thresholds": [{ "value": 1, "operator": "above_or_equal", "color": "Red" }]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "logs",
+                    "aggregations": [{ "expression": "count()" }],
+                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment AND android.apm.module = 'crash'" }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "anr-count": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "ANRs", "description": "Application-not-responding events" },
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "formatting": { "unit": "none", "decimalPrecision": "0" },
+              "thresholds": [{ "value": 1, "operator": "above_or_equal", "color": "Orange" }]
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "logs",
+                    "aggregations": [{ "expression": "count()" }],
+                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment AND android.apm.module = 'anr'" }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "sdk-drop-rate": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "SDK drop rate", "description": "P95 client-side telemetry drop ratio" },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": { "formatting": { "unit": "percentunit", "decimalPrecision": "2" } }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "logs",
+                    "aggregations": [{ "expression": "p95(android.apm.field.dropRate)" }],
+                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment AND android.apm.name = 'sdk_health_report'" },
+                    "groupBy": [{ "name": "service.version", "fieldDataType": "string", "fieldContext": "resource" }]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "startup-p90": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "Startup P90", "description": "Cold, warm and hot launch duration" },
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": { "formatting": { "unit": "ms", "decimalPrecision": "1" } }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "logs",
+                    "aggregations": [{ "expression": "p90(android.apm.field.launchDurationMs)" }],
+                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment AND android.apm.module = 'launch'" },
+                    "groupBy": [{ "name": "android.apm.name", "fieldDataType": "string", "fieldContext": "attribute" }]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "recent-errors": {
+        "kind": "Panel",
+        "spec": {
+          "display": { "name": "Recent errors", "description": "Newest ERROR/FATAL Android events" },
+          "plugin": {
+            "kind": "signoz/ListPanel",
+            "spec": {
+              "selectFields": [
+                { "name": "timestamp", "signal": "logs" },
+                { "name": "body", "signal": "logs" },
+                { "name": "severity_text", "signal": "logs" },
+                { "name": "android.apm.event_id", "signal": "logs" },
+                { "name": "service.version", "signal": "logs" }
+              ]
+            }
+          },
+          "queries": [
+            {
+              "kind": "raw",
+              "spec": {
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "name": "A",
+                    "signal": "logs",
+                    "aggregations": [{ "expression": "count()" }],
+                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment AND severity_text IN ('ERROR', 'FATAL')" },
+                    "order": [{ "key": { "name": "timestamp" }, "direction": "desc" }]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "items": [
+            { "x": 0, "y": 0, "width": 4, "height": 3, "content": { "$ref": "#/spec/panels/event-count" } },
+            { "x": 4, "y": 0, "width": 4, "height": 3, "content": { "$ref": "#/spec/panels/crash-count" } },
+            { "x": 8, "y": 0, "width": 4, "height": 3, "content": { "$ref": "#/spec/panels/anr-count" } },
+            { "x": 0, "y": 3, "width": 6, "height": 6, "content": { "$ref": "#/spec/panels/sdk-drop-rate" } },
+            { "x": 6, "y": 3, "width": 6, "height": 6, "content": { "$ref": "#/spec/panels/startup-p90" } },
+            { "x": 0, "y": 9, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/recent-errors" } }
+          ]
+        }
+      }
+    ]
+  }
+}

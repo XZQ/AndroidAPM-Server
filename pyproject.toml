@@ -1,0 +1,84 @@
+[project]
+name = "androidapm-server"
+version = "0.1.0"
+description = "Reliable AndroidAPM ingestion gateway and SigNoz OTLP bridge"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "XZQ" }]
+dependencies = [
+  "alembic>=1.16,<2",
+  "argon2-cffi>=25.1,<26",
+  "asyncpg>=0.30,<1",
+  "cryptography>=45,<47",
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "opentelemetry-proto>=1.36,<2",
+  "prometheus-client>=0.22,<1",
+  "protobuf>=6.31,<7",
+  "pydantic-settings>=2.10,<3",
+  "sqlalchemy[asyncio]>=2.0.41,<3",
+  "structlog>=25.4,<26",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[dependency-groups]
+dev = [
+  "aiosqlite>=0.21,<1",
+  "grpcio-tools>=1.73,<2",
+  "hypothesis>=6.135,<7",
+  "mypy>=1.16,<2",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.0,<2",
+  "pytest-cov>=6.2,<7",
+  "pyyaml>=6,<7",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+androidapm-api = "androidapm_server.main:run"
+androidapm-worker = "androidapm_server.worker:run"
+androidapm-admin = "androidapm_server.admin:run"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/androidapm_server"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["androidapm_server"]
+omit = [
+  "src/androidapm_server/generated/*",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/versions/*.py" = ["E501"]
+"src/androidapm_server/generated/*.py" = ["ALL"]
+"src/androidapm_server/generated/*.pyi" = ["ALL"]
+"tests/*.py" = ["S105", "S106"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["src/androidapm_server/generated/"]
+
+[[tool.mypy.overrides]]
+module = ["google.protobuf.*", "opentelemetry.proto.*"]
+ignore_missing_imports = true

@@ -1,0 +1,68 @@
+name: androidapm-server
+
+x-app-environment: &app-environment
+  APM_ENVIRONMENT: local
+  APM_DATABASE_URL: postgresql+asyncpg://androidapm:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/androidapm
+  APM_OTLP_LOGS_ENDPOINT: ${APM_OTLP_LOGS_ENDPOINT:-http://host.docker.internal:4318/v1/logs}
+  APM_OTLP_HEADERS_JSON: '${APM_OTLP_HEADERS_JSON:-{}}'
+
+services:
+  postgres:
+    image: postgres:16.9-bookworm
+    environment:
+      POSTGRES_DB: androidapm
+      POSTGRES_USER: androidapm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-only-change-me}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U androidapm -d androidapm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  gateway:
+    build: .
+    environment: *app-environment
+    ports:
+      - "8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["androidapm-worker"]
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
