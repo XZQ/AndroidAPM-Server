@@ -73,6 +73,22 @@ SDK 会把 `|` 替换为 `/`、`,` 替换为 `;`、换行替换为空格。嵌�
 
 零长度帧、截断长度、超限帧、尾部不足和无 eventId 的消息均拒绝整批。未知 Protobuf 字段按规范忽略，原始请求哈希保留用于审计。
 
+## Protobuf V2 envelope
+
+V2 是显式的新契约，不会把 legacy `application/x-protobuf` 静默改义。请求必须同时满足：
+
+```http
+Content-Type: application/x-protobuf; message=ApmBatchEnvelope; version=2
+X-Apm-Schema-Version: 2
+X-Apm-Sdk-Version: 0.1.0
+X-Apm-Batch-Id: b2-<32 lowercase hex>
+X-Apm-Event-Count: <complete event count>
+```
+
+body 为 `ApmBatchEnvelope`，包含 schema/SDK 版本、按有序 eventId 计算的稳定 batch ID、发送时间、固定 resource 和完整事件列表。resource 的 `service_name/service_version/deployment_environment/installation_id` 必须非空且有界；app/environment/SDK/app-version 请求头与 body 必须一致。batch ID 使用 schema 字节和每个 UTF-8 eventId 的 4-byte big-endian 长度前缀计算 SHA-256，保留前 16 字节并加 `b2-` 前缀。
+
+V2 事件只允许字段 15 `typed_fields`，拒绝同时使用 legacy 字段 10。支持 `NULL/STRING/BOOLEAN/BYTE/SHORT/INT/LONG/FLOAT/DOUBLE/CHAR/BIG_INTEGER/BIG_DECIMAL`；整数使用规范十进制，浮点必须有限，任意精度数值最多 4,096 字符并以精确文本持久化。任一 envelope、resource、header 或事件不一致都拒绝整批且不写 inbox。
+
 ## 整批 ACK
 
 成功响应只在事务提交后产生：
@@ -87,7 +103,15 @@ SDK 会把 `|` 替换为 `/`、`,` 替换为 `;`、换行替换为空格。嵌�
 }
 ```
 
-重复事件是成功，不重新进入 inbox。返回体仅供诊断；现有 SDK 只依据 2xx 判断成功。任何一条非法事件使整批返回非 2xx，数据库不插入其中任何事件。
+重复事件是成功，不重新进入 inbox。legacy 返回体仅供诊断并按 2xx 判断成功。V2 只有在事务提交后返回 2xx，并且以下响应头精确匹配请求，客户端才删除该物理批次：
+
+```http
+X-Apm-Schema-Version: 2
+X-Apm-Batch-Id: <request batch ID>
+X-Apm-Event-Count: <request event count>
+```
+
+任何一条非法事件使整批返回非 2xx，数据库不插入其中任何事件。2xx 丢失或 ACK 头不匹配时客户端会安全重传，由 `(tenant_id,event_id)` 唯一约束去重。
 
 ## 错误语义
 

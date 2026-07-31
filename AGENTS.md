@@ -18,16 +18,17 @@ This is the repository-local handoff entry for AndroidAPM-Server. Source code, m
 
 ## Current verified baseline
 
-- Baseline date: `2026-07-16`
-- Branch: `codex/server-foundation`
+- Baseline date: `2026-07-31`
+- Branch: `codex/collector-v2-e2e`
 - Runtime: Python `3.11.15`, FastAPI `0.139.0`, SQLAlchemy `2.0.51`
 - Persistence: PostgreSQL production model; SQLite is used only for fast compatibility tests
 - Telemetry target: OTLP/HTTP Logs to SigNoz `v0.133.0`, installed with Foundry `v0.2.13`
-- Verification: see `docs/PROJECT_HANDOFF.md`; do not infer Docker/PostgreSQL/SigNoz deployment from local unit-test success
+- Verification: 53 local tests plus a real Android `HttpApmUploader` -> HTTP/Gzip -> Collector -> SQLite compatibility E2E; see `docs/PROJECT_HANDOFF.md`. Do not infer Docker/PostgreSQL/SigNoz deployment from this evidence.
 
 ## Non-negotiable invariants
 
 - A `2xx` ingest response means the complete batch was durably committed to the inbox.
+- V2 success additionally requires exact `X-Apm-Schema-Version`, `X-Apm-Batch-Id`, and `X-Apm-Event-Count` response headers after commit.
 - A non-`2xx` response must never cause the client to delete the batch.
 - Deduplication is enforced by a database unique constraint on `(tenant_id, event_id)`; duplicate replay is acknowledged successfully.
 - A mixed valid/invalid batch is rejected as a whole until a versioned item-level ACK protocol exists.

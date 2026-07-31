@@ -15,7 +15,9 @@ from androidapm_server.config import Settings
 from androidapm_server.db.base import Base
 from androidapm_server.db.models import InboxEvent, IngestKey, RemoteConfigVersion, Tenant
 from androidapm_server.db.session import get_session
+from androidapm_server.generated.apm_event_pb2 import ApmBatchEnvelope
 from androidapm_server.main import create_app
+from androidapm_server.protocol.envelope_v2 import stable_batch_id
 from androidapm_server.remote_config import (
     generate_signing_keypair,
     sign_config,
@@ -74,6 +76,54 @@ def headers(key: str, environment: str = "test") -> dict[str, str]:
     }
 
 
+def v2_request(
+    key: str,
+    event_id: str = "api-v2-event-1",
+    resource_environment: str = "test",
+) -> tuple[dict[str, str], bytes]:
+    """Build a complete versioned request using the generated wire schema."""
+    batch_id = stable_batch_id([event_id])
+    envelope = ApmBatchEnvelope(
+        schema_version=2,
+        sdk_name="android-apm",
+        sdk_version="0.1.0",
+        batch_id=batch_id,
+        sent_at_ms=1_700_000_000_100,
+    )
+    envelope.resource.service_name = "com.example"
+    envelope.resource.service_version = "2.4.1"
+    envelope.resource.deployment_environment = resource_environment
+    envelope.resource.installation_id = "anonymous-installation"
+    event = envelope.events.add(
+        timestamp=1_700_000_000_000,
+        event_id=event_id,
+        module="network",
+        name="request",
+        kind="METRIC",
+        severity="INFO",
+        priority="NORMAL",
+        process_name="com.example",
+        thread_name="main",
+    )
+    event.typed_fields["durationMs"].type = "DOUBLE"
+    event.typed_fields["durationMs"].value = "42.5"
+    return (
+        {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": (
+                "application/x-protobuf; message=ApmBatchEnvelope; version=2"
+            ),
+            "X-Apm-Schema-Version": "2",
+            "X-Apm-Sdk-Version": "0.1.0",
+            "X-Apm-App-Id": "com.example",
+            "X-Apm-Environment": "test",
+            "X-Apm-Batch-Id": batch_id,
+            "X-Apm-Event-Count": "1",
+        },
+        envelope.SerializeToString(),
+    )
+
+
 @pytest.mark.asyncio
 async def test_success_means_durable_insert_and_replay_is_duplicate(
     api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str],
@@ -94,6 +144,85 @@ async def test_success_means_durable_insert_and_replay_is_duplicate(
     assert second.json()["duplicates"] == 1
     async with factory() as session:
         assert await session.scalar(select(func.count()).select_from(InboxEvent)) == 1
+
+
+@pytest.mark.asyncio
+async def test_v2_returns_exact_ack_headers_and_replay_is_duplicate(
+    api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str],
+) -> None:
+    client, factory, key = api
+    request_headers, body = v2_request(key)
+    first = await client.post("/v1/events", headers=request_headers, content=body)
+    second = await client.post("/v1/events", headers=request_headers, content=body)
+
+    assert first.status_code == 200
+    assert first.headers["X-Apm-Schema-Version"] == "2"
+    assert first.headers["X-Apm-Batch-Id"] == request_headers["X-Apm-Batch-Id"]
+    assert first.headers["X-Apm-Event-Count"] == "1"
+    assert second.status_code == 200
+    assert second.json()["duplicates"] == 1
+    async with factory() as session:
+        rows = (await session.scalars(select(InboxEvent))).all()
+        assert len(rows) == 1
+        assert rows[0].protocol == "protobuf_envelope_v2"
+        assert rows[0].app_version == "2.4.1"
+        assert rows[0].payload_json["fields"]["durationMs"] == 42.5
+        assert rows[0].payload_json["field_types"]["durationMs"] == "DOUBLE"
+        assert (
+            rows[0].payload_json["unknown"]["resource.installationId"]
+            == "anonymous-installation"
+        )
+
+
+@pytest.mark.asyncio
+async def test_v2_header_or_resource_mismatch_rejects_whole_request(
+    api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str],
+) -> None:
+    client, factory, key = api
+    request_headers, body = v2_request(key)
+    request_headers["X-Apm-Event-Count"] = "2"
+    count_mismatch = await client.post(
+        "/v1/events",
+        headers=request_headers,
+        content=body,
+    )
+    request_headers, body = v2_request(key, resource_environment="different")
+    resource_mismatch = await client.post(
+        "/v1/events",
+        headers=request_headers,
+        content=body,
+    )
+
+    assert count_mismatch.status_code == 400
+    assert resource_mismatch.status_code == 400
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(InboxEvent)) == 0
+
+
+@pytest.mark.asyncio
+async def test_v2_media_type_and_schema_must_be_selected_together(
+    api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str],
+) -> None:
+    client, factory, key = api
+    request_headers, body = v2_request(key)
+    request_headers["Content-Type"] = "application/x-protobuf"
+    legacy_media = await client.post(
+        "/v1/events",
+        headers=request_headers,
+        content=body,
+    )
+    request_headers, body = v2_request(key)
+    request_headers["X-Apm-Schema-Version"] = "1"
+    legacy_schema = await client.post(
+        "/v1/events",
+        headers=request_headers,
+        content=body,
+    )
+
+    assert legacy_media.status_code == 400
+    assert legacy_schema.status_code == 400
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(InboxEvent)) == 0
 
 
 @pytest.mark.asyncio

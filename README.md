@@ -1,6 +1,6 @@
 # AndroidAPM-Server
 
-AndroidAPM-Server is the backend for the [AndroidAPM](https://github.com/XZQ/AndroidAPM) SDK. It accepts the SDK's existing Line Protocol and length-prefixed Protobuf batches, durably deduplicates at-least-once deliveries, and exports normalized OpenTelemetry data to SigNoz.
+AndroidAPM-Server is the backend for the [AndroidAPM](https://github.com/XZQ/AndroidAPM) SDK. It accepts the SDK's existing Line Protocol and length-prefixed Protobuf batches plus the explicit Protobuf V2 batch envelope, durably deduplicates at-least-once deliveries, and exports normalized OpenTelemetry data to SigNoz.
 
 The project deliberately does not fork SigNoz. Android-specific ingestion, tenancy, symbolization, remote configuration, and release-artifact handling live here; telemetry storage, querying, dashboards, and alert evaluation are provided by SigNoz and its ClickHouse data plane.
 
@@ -10,10 +10,10 @@ The project deliberately does not fork SigNoz. Android-specific ingestion, tenan
 AndroidAPM SDK
   -> HTTPS Gateway
      -> authentication / tenant boundary / quota
-     -> gzip + Line Protocol / length-prefixed Protobuf decoding
+     -> gzip + Line Protocol / length-prefixed Protobuf / V2 envelope decoding
      -> schema validation
      -> PostgreSQL durable inbox + (tenant_id, event_id) deduplication
-     -> whole-batch ACK
+     -> post-commit whole-batch ACK (V2 requires exact schema/batch/count headers)
   -> leased export worker
      -> OTLP logs / metrics
   -> SigNoz ingester
@@ -23,7 +23,7 @@ AndroidAPM SDK
 
 ## Delivery status
 
-The first runnable foundation now includes authenticated whole-batch ingestion, bounded Gzip/Line/Protobuf decoding, distributed database quota counters, durable idempotent Inbox, leased OTLP Logs export, signed remote configuration, and versioned SigNoz Dashboard/alert assets. The authoritative roadmap and acceptance criteria are in [docs/00-总体规划.md](docs/00-%E6%80%BB%E4%BD%93%E8%A7%84%E5%88%92.md). Current proof and external blockers are in [docs/PROJECT_HANDOFF.md](docs/PROJECT_HANDOFF.md). The cloud-wide backlog remains [docs/云端待建设清单.md](docs/%E4%BA%91%E7%AB%AF%E5%BE%85%E5%BB%BA%E8%AE%BE%E6%B8%85%E5%8D%95.md).
+The first runnable foundation now includes authenticated whole-batch ingestion, bounded Gzip/Line/legacy-Protobuf/V2-envelope decoding, exact V2 acknowledgement, distributed database quota counters, durable idempotent Inbox, leased OTLP Logs export, signed remote configuration, and versioned SigNoz Dashboard/alert assets. The authoritative roadmap and acceptance criteria are in [docs/00-总体规划.md](docs/00-%E6%80%BB%E4%BD%93%E8%A7%84%E5%88%92.md). Current proof and external blockers are in [docs/PROJECT_HANDOFF.md](docs/PROJECT_HANDOFF.md). The cloud-wide backlog remains [docs/云端待建设清单.md](docs/%E4%BA%91%E7%AB%AF%E5%BE%85%E5%BB%BA%E8%AE%BE%E6%B8%85%E5%8D%95.md).
 
 ## Planned local workflow
 

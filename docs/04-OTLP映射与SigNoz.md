@@ -42,7 +42,7 @@ Crash/ANR 使用 OTel exception 语义属性：`exception.type,message,stacktrac
 | `sdk_health.queueSize` | `android.apm.sdk.queue.size` | gauge, `{event}` |
 | `frame.*.durationMs` | `android.apm.frame.duration` | histogram, ms |
 
-当前 Protobuf 把 `fields` 序列化为 string，因此 worker 必须依据注册表进行严格解析；解析失败时保留 LogRecord、增加映射错误计数，不能猜测类型或丢掉整个事件。
+legacy Line/Protobuf 把 `fields` 序列化为 string，因此 worker 必须依据注册表进行严格解析；V2 envelope 为字段 15 携带显式标量类型，Gateway 同时持久化值和 `field_types`，其中 BigInteger/BigDecimal 保留精确文本。解析失败时保留 LogRecord、增加映射错误计数，不能猜测类型或丢掉整个事件。
 
 ## Trace 映射
 

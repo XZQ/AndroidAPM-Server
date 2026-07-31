@@ -24,25 +24,38 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0f\x61pm_event.proto\x12\tapm.proto\"\x9f\x04\n\x0f\x41pmEventMessage\x12\x11\n\ttimestamp\x18\x01 \x01(\x03\x12\x0e\n\x06module\x18\x02 \x01(\t\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\x0c\n\x04kind\x18\x04 \x01(\t\x12\x10\n\x08severity\x18\x05 \x01(\t\x12\x14\n\x0cprocess_name\x18\x06 \x01(\t\x12\x13\n\x0bthread_name\x18\x07 \x01(\t\x12\r\n\x05scene\x18\x08 \x01(\t\x12\x12\n\nforeground\x18\t \x01(\x08\x12\x36\n\x06\x66ields\x18\n \x03(\x0b\x32&.apm.proto.ApmEventMessage.FieldsEntry\x12\x45\n\x0eglobal_context\x18\x0b \x03(\x0b\x32-.apm.proto.ApmEventMessage.GlobalContextEntry\x12\x36\n\x06\x65xtras\x18\x0c \x03(\x0b\x32&.apm.proto.ApmEventMessage.ExtrasEntry\x12\x10\n\x08priority\x18\r \x01(\t\x12\x10\n\x08\x65vent_id\x18\x0e \x01(\t\x1a-\n\x0b\x46ieldsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x34\n\x12GlobalContextEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a-\n\x0b\x45xtrasEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0f\x61pm_event.proto\x12\rcom.apm.model\"\xc4\x05\n\x0f\x41pmEventMessage\x12\x11\n\ttimestamp\x18\x01 \x01(\x03\x12\x0e\n\x06module\x18\x02 \x01(\t\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\x0c\n\x04kind\x18\x04 \x01(\t\x12\x10\n\x08severity\x18\x05 \x01(\t\x12\x14\n\x0cprocess_name\x18\x06 \x01(\t\x12\x13\n\x0bthread_name\x18\x07 \x01(\t\x12\r\n\x05scene\x18\x08 \x01(\t\x12\x12\n\nforeground\x18\t \x01(\x08\x12:\n\x06\x66ields\x18\n \x03(\x0b\x32*.com.apm.model.ApmEventMessage.FieldsEntry\x12I\n\x0eglobal_context\x18\x0b \x03(\x0b\x32\x31.com.apm.model.ApmEventMessage.GlobalContextEntry\x12:\n\x06\x65xtras\x18\x0c \x03(\x0b\x32*.com.apm.model.ApmEventMessage.ExtrasEntry\x12\x10\n\x08priority\x18\r \x01(\t\x12\x10\n\x08\x65vent_id\x18\x0e \x01(\t\x12\x45\n\x0ctyped_fields\x18\x0f \x03(\x0b\x32/.com.apm.model.ApmEventMessage.TypedFieldsEntry\x1a-\n\x0b\x46ieldsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x34\n\x12GlobalContextEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a-\n\x0b\x45xtrasEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1aP\n\x10TypedFieldsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12+\n\x05value\x18\x02 \x01(\x0b\x32\x1c.com.apm.model.ApmTypedValue:\x02\x38\x01\",\n\rApmTypedValue\x12\x0c\n\x04type\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t\"u\n\x0b\x41pmResource\x12\x14\n\x0cservice_name\x18\x01 \x01(\t\x12\x17\n\x0fservice_version\x18\x02 \x01(\t\x12\x1e\n\x16\x64\x65ployment_environment\x18\x03 \x01(\t\x12\x17\n\x0finstallation_id\x18\x04 \x01(\t\"\xd5\x01\n\x10\x41pmBatchEnvelope\x12\x16\n\x0eschema_version\x18\x01 \x01(\r\x12\x10\n\x08sdk_name\x18\x02 \x01(\t\x12\x13\n\x0bsdk_version\x18\x03 \x01(\t\x12\x10\n\x08\x62\x61tch_id\x18\x04 \x01(\t\x12\x12\n\nsent_at_ms\x18\x05 \x01(\x03\x12,\n\x08resource\x18\x06 \x01(\x0b\x32\x1a.com.apm.model.ApmResource\x12.\n\x06\x65vents\x18\x07 \x03(\x0b\x32\x1e.com.apm.model.ApmEventMessage\"U\n\x0b\x41pmBatchAck\x12\x16\n\x0eschema_version\x18\x01 \x01(\r\x12\x10\n\x08\x62\x61tch_id\x18\x02 \x01(\t\x12\x1c\n\x14\x61\x63\x63\x65pted_event_count\x18\x03 \x01(\rB\x1e\n\rcom.apm.modelB\rApmEventProtob\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'apm_event_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-  DESCRIPTOR._loaded_options = None
+  _globals['DESCRIPTOR']._loaded_options = None
+  _globals['DESCRIPTOR']._serialized_options = b'\n\rcom.apm.modelB\rApmEventProto'
   _globals['_APMEVENTMESSAGE_FIELDSENTRY']._loaded_options = None
   _globals['_APMEVENTMESSAGE_FIELDSENTRY']._serialized_options = b'8\001'
   _globals['_APMEVENTMESSAGE_GLOBALCONTEXTENTRY']._loaded_options = None
   _globals['_APMEVENTMESSAGE_GLOBALCONTEXTENTRY']._serialized_options = b'8\001'
   _globals['_APMEVENTMESSAGE_EXTRASENTRY']._loaded_options = None
   _globals['_APMEVENTMESSAGE_EXTRASENTRY']._serialized_options = b'8\001'
-  _globals['_APMEVENTMESSAGE']._serialized_start=31
-  _globals['_APMEVENTMESSAGE']._serialized_end=574
-  _globals['_APMEVENTMESSAGE_FIELDSENTRY']._serialized_start=428
-  _globals['_APMEVENTMESSAGE_FIELDSENTRY']._serialized_end=473
-  _globals['_APMEVENTMESSAGE_GLOBALCONTEXTENTRY']._serialized_start=475
-  _globals['_APMEVENTMESSAGE_GLOBALCONTEXTENTRY']._serialized_end=527
-  _globals['_APMEVENTMESSAGE_EXTRASENTRY']._serialized_start=529
-  _globals['_APMEVENTMESSAGE_EXTRASENTRY']._serialized_end=574
+  _globals['_APMEVENTMESSAGE_TYPEDFIELDSENTRY']._loaded_options = None
+  _globals['_APMEVENTMESSAGE_TYPEDFIELDSENTRY']._serialized_options = b'8\001'
+  _globals['_APMEVENTMESSAGE']._serialized_start=35
+  _globals['_APMEVENTMESSAGE']._serialized_end=743
+  _globals['_APMEVENTMESSAGE_FIELDSENTRY']._serialized_start=515
+  _globals['_APMEVENTMESSAGE_FIELDSENTRY']._serialized_end=560
+  _globals['_APMEVENTMESSAGE_GLOBALCONTEXTENTRY']._serialized_start=562
+  _globals['_APMEVENTMESSAGE_GLOBALCONTEXTENTRY']._serialized_end=614
+  _globals['_APMEVENTMESSAGE_EXTRASENTRY']._serialized_start=616
+  _globals['_APMEVENTMESSAGE_EXTRASENTRY']._serialized_end=661
+  _globals['_APMEVENTMESSAGE_TYPEDFIELDSENTRY']._serialized_start=663
+  _globals['_APMEVENTMESSAGE_TYPEDFIELDSENTRY']._serialized_end=743
+  _globals['_APMTYPEDVALUE']._serialized_start=745
+  _globals['_APMTYPEDVALUE']._serialized_end=789
+  _globals['_APMRESOURCE']._serialized_start=791
+  _globals['_APMRESOURCE']._serialized_end=908
+  _globals['_APMBATCHENVELOPE']._serialized_start=911
+  _globals['_APMBATCHENVELOPE']._serialized_end=1124
+  _globals['_APMBATCHACK']._serialized_start=1126
+  _globals['_APMBATCHACK']._serialized_end=1211
 # @@protoc_insertion_point(module_scope)

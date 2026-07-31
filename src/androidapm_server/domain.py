@@ -62,6 +62,7 @@ class ApmEvent(BaseModel):
     scene: str | None = None
     foreground: bool | None = None
     fields: dict[str, Any] = Field(default_factory=dict)
+    field_types: dict[str, str] = Field(default_factory=dict)
     global_context: dict[str, str] = Field(default_factory=dict)
     extras: dict[str, str] = Field(default_factory=dict)
     unknown: dict[str, str] = Field(default_factory=dict)
@@ -93,7 +94,7 @@ class ApmEvent(BaseModel):
             raise ValueError("scene exceeds 256 UTF-8 bytes")
         return value
 
-    @field_validator("fields", "global_context", "extras", "unknown")
+    @field_validator("fields", "field_types", "global_context", "extras", "unknown")
     @classmethod
     def validate_map(cls, value: dict[str, Any]) -> dict[str, Any]:
         """Bound map cardinality and serialized key/value sizes."""
