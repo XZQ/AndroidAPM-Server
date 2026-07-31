@@ -23,7 +23,7 @@ This is the repository-local handoff entry for AndroidAPM-Server. Source code, m
 - Runtime: Python `3.11.15`, FastAPI `0.139.0`, SQLAlchemy `2.0.51`
 - Persistence: PostgreSQL production model; SQLite is used only for fast compatibility tests
 - Telemetry target: OTLP/HTTP Logs to SigNoz `v0.133.0`, installed with Foundry `v0.2.13`
-- Verification: 53 local tests plus a real Android `HttpApmUploader` -> HTTP/Gzip -> Collector -> SQLite compatibility E2E; see `docs/PROJECT_HANDOFF.md`. Do not infer Docker/PostgreSQL/SigNoz deployment from this evidence.
+- Verification: 57 local tests plus a real Android `HttpApmUploader` -> HTTP/Gzip -> Collector -> SQLite compatibility E2E; see `docs/PROJECT_HANDOFF.md`. Do not infer Docker/PostgreSQL/SigNoz deployment from this evidence.
 
 ## Non-negotiable invariants
 

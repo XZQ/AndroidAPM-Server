@@ -28,6 +28,7 @@ from androidapm_server.protocol.line import _safe_validation_message
 
 _BATCH_ID_PATTERN = re.compile(r"^b2-[0-9a-f]{32}$")
 _MAX_ARBITRARY_PRECISION_CHARACTERS = 4_096
+_CANONICAL_NON_FINITE_FLOATS = frozenset({"NaN", "Infinity", "-Infinity"})
 _INTEGER_BOUNDS = {
     "BYTE": (-128, 127),
     "SHORT": (-32_768, 32_767),
@@ -193,7 +194,13 @@ def _typed_value(typed: ApmTypedValue) -> object:
     if scalar_type in {"FLOAT", "DOUBLE"}:
         parsed_float = float(value)
         if not math.isfinite(parsed_float):
-            raise ValueError(f"{scalar_type} typed value must be finite")
+            if value not in _CANONICAL_NON_FINITE_FLOATS:
+                raise ValueError(
+                    f"{scalar_type} non-finite value must use canonical Kotlin text"
+                )
+            # JSON/JSONB cannot portably store IEEE non-finite numbers. Retain the exact
+            # text together with field_types instead of emitting invalid JSON.
+            return value
         return parsed_float
     if scalar_type == "CHAR":
         if len(value) != 1:

@@ -26,7 +26,7 @@ uv run python scripts/verify_docs.py
 git diff --check
 ```
 
-以上命令通过：ruff 无问题，mypy 对 35 个 source files 无问题，pytest 为 53 tests / 0 failures。协议测试覆盖 V2 media/schema 协商、SDK/resource/header 一致性、稳定 batch ID、12 种 typed scalar、任意精度输入上限、legacy 字段隔离、原子拒绝、提交后精确 ACK 和重复重放。
+以上命令通过：ruff 无问题，mypy 对 35 个 source files 无问题，pytest 为 57 tests / 0 failures。协议测试覆盖 V2 media/schema 协商、SDK/resource/header 一致性、稳定 batch ID、12 种 typed scalar、JSON-safe 非有限浮点保真、任意精度输入上限、legacy 字段隔离、原子拒绝、提交后精确 ACK 和重复重放。
 
 同日从 Android 客户端仓库运行 `tools/verify_collector_e2e.py`：它以 JDK 17 构建真实 `apm-model` 与 `apm-uploader`，启动实际 FastAPI/uvicorn Gateway，通过 Gzip HTTP 连续发送两次相同 V2 batch。真实 `HttpApmUploader` 两次均收到精确 ACK；测试用 SQLite inbox 最终只有 2 条唯一事件，12 种标量、resource、schema 和 protocol 元数据均经数据库读取复核。这是跨语言/真实 HTTP 兼容证据；SQLite 仅用于该测试，不构成 PostgreSQL 生产 durability 或并发结论。
 

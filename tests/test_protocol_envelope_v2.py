@@ -123,3 +123,22 @@ def test_rejects_oversized_arbitrary_precision_text_before_integer_conversion() 
 
     with pytest.raises(ApiError, match="4096"):
         decode_envelope_v2(message.SerializeToString(), max_events=32)
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
+def test_retains_canonical_non_finite_float_as_json_safe_typed_text(value: str) -> None:
+    message = envelope()
+    message.events[0].typed_fields["doubleValue"].value = value
+
+    decoded = decode_envelope_v2(message.SerializeToString(), max_events=32)
+
+    assert decoded.events[0].fields["doubleValue"] == value
+    assert decoded.events[0].field_types["doubleValue"] == "DOUBLE"
+
+
+def test_rejects_noncanonical_non_finite_float_text() -> None:
+    message = envelope()
+    message.events[0].typed_fields["doubleValue"].value = "nan"
+
+    with pytest.raises(ApiError, match="canonical Kotlin text"):
+        decode_envelope_v2(message.SerializeToString(), max_events=32)

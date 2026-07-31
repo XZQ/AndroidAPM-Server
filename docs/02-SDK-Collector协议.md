@@ -87,7 +87,7 @@ X-Apm-Event-Count: <complete event count>
 
 body 为 `ApmBatchEnvelope`，包含 schema/SDK 版本、按有序 eventId 计算的稳定 batch ID、发送时间、固定 resource 和完整事件列表。resource 的 `service_name/service_version/deployment_environment/installation_id` 必须非空且有界；app/environment/SDK/app-version 请求头与 body 必须一致。batch ID 使用 schema 字节和每个 UTF-8 eventId 的 4-byte big-endian 长度前缀计算 SHA-256，保留前 16 字节并加 `b2-` 前缀。
 
-V2 事件只允许字段 15 `typed_fields`，拒绝同时使用 legacy 字段 10。支持 `NULL/STRING/BOOLEAN/BYTE/SHORT/INT/LONG/FLOAT/DOUBLE/CHAR/BIG_INTEGER/BIG_DECIMAL`；整数使用规范十进制，浮点必须有限，任意精度数值最多 4,096 字符并以精确文本持久化。任一 envelope、resource、header 或事件不一致都拒绝整批且不写 inbox。
+V2 事件只允许字段 15 `typed_fields`，拒绝同时使用 legacy 字段 10。支持 `NULL/STRING/BOOLEAN/BYTE/SHORT/INT/LONG/FLOAT/DOUBLE/CHAR/BIG_INTEGER/BIG_DECIMAL`；整数使用规范十进制，有限浮点存数值，Kotlin 规范 `NaN/Infinity/-Infinity` 因 JSON/JSONB 限制而连同类型判别保留为精确文本，任意精度数值最多 4,096 字符并以精确文本持久化。任一 envelope、resource、header 或事件不一致都拒绝整批且不写 inbox。
 
 ## 整批 ACK
 
