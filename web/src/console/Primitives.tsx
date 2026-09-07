@@ -110,4 +110,3 @@ export function SectionHeading({ title, meta }: { title: string; meta?: ReactNod
     </div>
   );
 }
-

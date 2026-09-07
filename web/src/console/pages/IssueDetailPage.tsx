@@ -140,4 +140,3 @@ function DistributionView({ distribution }: { distribution: IssueDistribution })
     </div>
   );
 }
-
