@@ -36,6 +36,7 @@ from androidapm_server.constants import (
     SUPPORTED_SCHEMA_VERSIONS,
 )
 from androidapm_server.db.inbox import insert_batch
+from androidapm_server.db.maintenance import check_inbox_capacity
 from androidapm_server.db.quota import consume_quota
 from androidapm_server.db.session import get_session
 from androidapm_server.db.symbolization import enqueue_symbolization_jobs
@@ -220,6 +221,8 @@ async def ingest_events(
         await enqueue_symbolization_jobs(
             session, metadata, events, enabled=settings.symbolization_enabled
         )
+        if result.inserted:
+            await check_inbox_capacity(session, settings)
         # This commit is the public durability boundary. A 2xx ACK cannot precede it.
         await session.commit()
     except Exception:

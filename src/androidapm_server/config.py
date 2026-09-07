@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     metrics_refresh_seconds: float = Field(default=15, ge=1, le=300)
     delivered_retention_days: int = Field(default=7, ge=1, le=365)
     dead_letter_retention_days: int = Field(default=30, ge=1, le=3650)
+    retention_enabled: bool = True
+    retention_batch_size: int = Field(default=1000, ge=1, le=5000)
+    retention_interval_seconds: float = Field(default=60, ge=1, le=3600)
+    inbox_max_live_events: int = Field(default=100_000, ge=1)
+    inbox_max_raw_bytes: int = Field(default=10 * 1024**3, ge=1024)
     artifact_storage_path: Path = Path("artifacts")
     max_java_mapping_bytes: int = Field(
         default=32 * 1_024 * 1_024, ge=1_024, le=128 * 1_024 * 1_024

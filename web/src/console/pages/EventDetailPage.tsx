@@ -109,6 +109,7 @@ export function EventDetailPage() {
       </section>
 
       <section className="console-panel raw-evidence-panel">
+        {metadata.rawAvailable === false ? <p>原始证据已按保留策略清理；事件身份和去重记录仍保留。</p> : null}
         <div className="raw-access-copy">
           <FileLock2 size={25} aria-hidden="true" />
           <div>
@@ -119,7 +120,7 @@ export function EventDetailPage() {
         <form className="raw-access-form" onSubmit={(event) => void requestRaw(event)}>
           <label>用途<select value={purpose} onChange={(event) => setPurpose(event.target.value)}><option value="incident_diagnosis">事故诊断</option><option value="release_validation">发布验证</option><option value="customer_support">客户支持</option><option value="security_investigation">安全调查</option></select></label>
           <label>读取理由（至少 10 字符）<textarea rows={3} minLength={10} maxLength={512} required value={reason} onChange={(event) => setReason(event.target.value)} placeholder="说明为何必须查看这一条原始事件" /></label>
-          <button className="console-button primary" type="submit" disabled={rawLoading || reason.trim().length < 10}><ShieldCheck size={15} />{rawLoading ? "审计并读取中…" : "审计后读取"}</button>
+          <button className="console-button primary" type="submit" disabled={metadata.rawAvailable === false || rawLoading || reason.trim().length < 10}><ShieldCheck size={15} />{rawLoading ? "审计并读取中…" : "审计后读取"}</button>
         </form>
         {rawError !== null ? <ErrorPanel message={rawError} /> : null}
         {raw !== null ? (

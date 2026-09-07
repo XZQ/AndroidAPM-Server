@@ -10,6 +10,7 @@ import uuid
 import structlog
 
 from androidapm_server.config import get_settings
+from androidapm_server.db.maintenance import maintain_once
 from androidapm_server.db.models import InboxEvent
 from androidapm_server.db.session import get_session_factory
 from androidapm_server.db.worker import claim_batch, mark_delivered, mark_failed
@@ -126,10 +127,23 @@ async def worker_loop() -> None:
         settings.otlp_timeout_seconds,
     )
     logger.info("worker_started", owner=owner)
+    next_maintenance = 0.0
     try:
         async with worker_observability("export", settings):
             while True:
                 try:
+                    if time.monotonic() >= next_maintenance:
+                        next_maintenance = time.monotonic() + settings.retention_interval_seconds
+                        try:
+                            pruned, expired = await maintain_once(get_session_factory(), settings)
+                            if pruned or expired:
+                                logger.info(
+                                    "retention_completed", raw_pruned=pruned, quota_expired=expired
+                                )
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            logger.warning("retention_cycle_failed")
                     changed = await export_once(client, owner)
                     WORKER_CYCLE_TIMESTAMP.labels("export").set(time.time())
                     if changed == 0:

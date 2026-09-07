@@ -129,6 +129,7 @@ class InboxEvent(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "event_id", name="uq_inbox_tenant_event"),
         Index("ix_inbox_claim", "status", "next_attempt_at", "lease_expires_at"),
+        Index("ix_inbox_retention", "status", "raw_pruned_at", "finalized_at"),
         Index("ix_inbox_tenant_received", "tenant_id", "received_at"),
         Index(
             "ix_inbox_query_scope_time",
@@ -197,6 +198,9 @@ class InboxEvent(Base):
     )
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    raw_pruned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     normalization_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=NORMALIZATION_VERSION
     )
@@ -308,6 +312,7 @@ class IngestRateWindow(Base):
     """Distributed fixed-window quota counters for one ingest credential."""
 
     __tablename__ = "ingest_rate_windows"
+    __table_args__ = (Index("ix_ingest_rate_expiry", "window_started_at"),)
 
     key_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("ingest_keys.key_id", ondelete="CASCADE"), primary_key=True

@@ -39,7 +39,12 @@ async def claim_batch(
             InboxEvent.lease_expires_at <= observed,
         ),
     )
-    statement = select(InboxEvent).where(claimable).order_by(InboxEvent.id).limit(limit)
+    statement = (
+        select(InboxEvent)
+        .where(claimable, InboxEvent.raw_pruned_at.is_(None))
+        .order_by(InboxEvent.id)
+        .limit(limit)
+    )
     if session.bind is not None and session.bind.dialect.name == "postgresql":
         statement = statement.with_for_update(skip_locked=True)
     rows = list((await session.scalars(statement)).all())
@@ -72,6 +77,7 @@ async def mark_delivered(
         .values(
             status=INBOX_STATUS_DELIVERED,
             delivered_at=now or datetime.now(UTC),
+            finalized_at=now or datetime.now(UTC),
             lease_owner=None,
             lease_expires_at=None,
             last_error_code=None,
@@ -107,6 +113,7 @@ async def mark_failed(
             )
             .values(
                 status=INBOX_STATUS_PENDING if should_retry else INBOX_STATUS_DEAD_LETTER,
+                finalized_at=None if should_retry else observed,
                 next_attempt_at=observed + timedelta(seconds=delay),
                 lease_owner=None,
                 lease_expires_at=None,

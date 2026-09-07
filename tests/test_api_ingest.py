@@ -79,6 +79,41 @@ def headers(key: str, environment: str = "test") -> dict[str, str]:
     }
 
 
+@pytest.mark.parametrize("capacity_kind", ["rows", "bytes"])
+async def test_capacity_rejects_new_batch_without_ack_and_still_accepts_replay(
+    api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str],
+    capacity_kind: str,
+) -> None:
+    client, factory, key = api
+    app = client._transport.app  # type: ignore[attr-defined]
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None,
+        database_url="sqlite+aiosqlite:///:memory:",
+        environment="test",
+        inbox_max_live_events=1 if capacity_kind == "rows" else 100,
+        inbox_max_raw_bytes=1024 if capacity_kind == "bytes" else 1024**3,
+        installation_hmac_keys_json=TEST_HMAC_KEYS_JSON,
+    )
+    first_headers, first_body = v2_request(key)
+    first = await client.post("/v1/events", headers=first_headers, content=first_body)
+    assert first.status_code == 200
+    second_headers, second_body = v2_request(key, event_id="capacity-second")
+    if capacity_kind == "bytes":
+        envelope = ApmBatchEnvelope.FromString(second_body)
+        envelope.events[0].typed_fields["largeUnknownField"].type = "STRING"
+        envelope.events[0].typed_fields["largeUnknownField"].value = "x" * 2000
+        second_body = envelope.SerializeToString()
+    rejected = await client.post("/v1/events", headers=second_headers, content=second_body)
+    assert rejected.status_code == 503
+    assert rejected.json()["retryable"]
+    assert rejected.headers["retry-after"] == "30"
+    assert "x-apm-batch-id" not in rejected.headers
+    replay = await client.post("/v1/events", headers=first_headers, content=first_body)
+    assert replay.status_code == 200 and replay.json()["duplicates"] == 1
+    async with factory() as session:
+        assert await session.scalar(select(func.count(InboxEvent.id))) == 1
+
+
 def v2_request(
     key: str,
     event_id: str = "api-v2-event-1",

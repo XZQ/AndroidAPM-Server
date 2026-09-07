@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import base64
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from androidapm_server.auth import generate_ingest_key
 from androidapm_server.config import Settings, get_settings
 from androidapm_server.db.base import Base
 from androidapm_server.db.inbox import insert_batch
-from androidapm_server.db.models import AuditLog, QueryKey, ReleaseDecision, Tenant
+from androidapm_server.db.maintenance import maintain_once
+from androidapm_server.db.models import AuditLog, InboxEvent, QueryKey, ReleaseDecision, Tenant
 from androidapm_server.db.session import get_session
 from androidapm_server.domain import (
     ApmEvent,
@@ -144,6 +145,38 @@ async def test_actual_key_rotation_is_visible_to_query_projection(
 
 def window_params(**extra: object) -> dict[str, object]:
     return {"fromMs": FROM_MS, "toMs": TO_MS, **extra}
+
+
+async def test_expired_raw_is_reported_and_audited_instead_of_returning_a_stub(
+    query_api: tuple[
+        AsyncClient, async_sessionmaker[AsyncSession], dict[str, str], InstallationHmacKeyRing
+    ],
+) -> None:
+    client, factory, credentials, _ = query_api
+    async with factory() as session:
+        await session.execute(
+            update(InboxEvent)
+            .where(InboxEvent.event_id == "new-crash-1")
+            .values(status="delivered", finalized_at=datetime.now(UTC) - timedelta(days=8))
+        )
+        await session.commit()
+    assert (await maintain_once(factory, Settings(_env_file=None)))[0] == 1
+    metadata = await client.get(
+        "/v1/query/events/new-crash-1", headers=auth(credentials["investigator-a"])
+    )
+    assert metadata.status_code == 200 and metadata.json()["rawAvailable"] is False
+    raw = await client.post(
+        "/v1/query/events/new-crash-1/raw",
+        headers=auth(credentials["investigator-a"]),
+        json={"purposeCode": "incident_diagnosis", "reason": "Investigate expired raw evidence"},
+    )
+    assert raw.status_code == 410
+    assert raw.json()["code"] == "raw_evidence_expired"
+    async with factory() as session:
+        audit = await session.scalar(
+            select(AuditLog).where(AuditLog.action == "query.event.raw.read")
+        )
+        assert audit is not None and audit.result == "expired"
 
 
 @pytest.mark.asyncio

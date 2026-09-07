@@ -22,6 +22,8 @@
 
 8. 运行指标：真实 DB backlog/最老年龄、读取失败 NaN/available=0、独立 worker 监听及采集配置、公网 metrics 隔离；导出计数在提交后更新。17 个相关测试通过，包括独立子进程 HTTP 抓取。
 
+9. 保留/容量准入：终态 raw 清理、保留原 hash/HMAC 去重、quota 过期、事务审计、raw 410、行数/字节阈值和失败回滚；新增迁移 0005 与 ADR 0008。140 个后端测试、前端四门禁（12 tests）和 SQLite 五版迁移 upgrade/check/downgrade/upgrade/check 通过。操作只在隔离测试数据库执行，未清理任何外部数据。
+
 ## 2026-09-04 多路由 APM 控制台与 Issue 聚合（历史）
 
 本轮把原有发布健康长页面升级为同源多路由诊断控制台：总览、Issues、Issue 详情、investigator 事件探索/详情、版本发布和数据质量均有独立可恢复 URL；性能、告警和设置以 `UNAVAILABLE`/`UNCONFIGURED` 页面公开真实建设边界。viewer 导航不显示事件枚举入口，直接访问事件页也只返回权限说明；L2 raw 不自动读取，仍要求 purpose/reason 并等待服务端审计提交。

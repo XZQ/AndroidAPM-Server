@@ -283,6 +283,7 @@ class EventPageResponse(QueryModel):
 class EventMetadataResponse(QueryModel):
     """One L1 event plus safe normalization state, without raw evidence."""
 
+    raw_available: bool = True
     request_id: str
     scope: QueryScope
     event: EventSummary

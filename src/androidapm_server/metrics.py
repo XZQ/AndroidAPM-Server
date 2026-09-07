@@ -42,6 +42,12 @@ WORKER_CYCLE_TIMESTAMP = Gauge(
 )
 INBOX_PENDING.set(float("nan"))
 INBOX_OLDEST_SECONDS.set(float("nan"))
+RETENTION_LAST_SUCCESS = Gauge(
+    "androidapm_retention_timestamp_seconds", "Last committed retention cycle."
+)
+RETENTION_EVENTS = Counter(
+    "androidapm_retention_events_total", "Committed retention actions.", ("action",)
+)
 EXPORT_EVENTS = Counter(
     "androidapm_export_events_total",
     "Inbox export outcomes.",

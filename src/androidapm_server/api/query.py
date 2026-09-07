@@ -311,6 +311,8 @@ async def get_raw_event(
         raise ApiError(400, "invalid_purpose_code", "The raw-access purpose code is invalid")
     event = await get_scoped_event(session, principal, event_id)
     result = "success" if event is not None else "not_found"
+    if event is not None and event.raw_pruned_at is not None:
+        result = "expired"
     session.add(
         _audit(
             principal,
@@ -325,6 +327,10 @@ async def get_raw_event(
     await session.commit()
     if event is None:
         raise ApiError(404, "event_not_found", "The event was not found")
+    if event.raw_pruned_at is not None:
+        raise ApiError(
+            410, "raw_evidence_expired", "Raw evidence expired under the retention policy"
+        )
     symbolized_result = (
         event.symbolization_job.result_json if event.symbolization_job is not None else None
     )
@@ -374,6 +380,7 @@ async def get_event_metadata(
         schema_version=event.schema_version,
         protocol=event.protocol,
         normalization_version=event.normalization_version,
+        raw_available=event.raw_pruned_at is None,
         field_states=field_states(event),
     )
 

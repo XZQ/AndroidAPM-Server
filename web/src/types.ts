@@ -204,6 +204,7 @@ export interface EventPage {
 }
 
 export interface EventMetadata {
+  rawAvailable?: boolean;
   requestId: string;
   scope: QueryScope;
   event: EventSummary;

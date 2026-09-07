@@ -453,6 +453,9 @@ def _to_row(metadata: IngestMetadata, prepared: PreparedEvent) -> dict[str, Any]
         "timestamp_quality": TIMESTAMP_QUALITY_EVENT_DECLARED,
         "payload_json": prepared.payload,
         "payload_sha256": prepared.payload_hash,
+        "payload_size_bytes": len(
+            json.dumps(prepared.payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ),
         "normalization_version": NORMALIZATION_VERSION,
         "normalized_json": normalization.normalized_json,
         "incident_fingerprint": normalization.incident_fingerprint,
