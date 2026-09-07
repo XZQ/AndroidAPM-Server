@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, or_, select, update
@@ -31,6 +31,7 @@ from androidapm_server.constants import (
     SYMBOL_STATUS_SYMBOLIZED,
     SYMBOL_STATUS_SYMBOLS_MISSING,
 )
+from androidapm_server.db.leases import lease_claim_time, lease_write_time
 from androidapm_server.db.models import InboxEvent, SymbolArtifact, SymbolizationJob, utc_now
 from androidapm_server.domain import ApmEvent, IngestMetadata
 
@@ -135,7 +136,7 @@ async def claim_symbolization_batch(
     now: datetime | None = None,
 ) -> list[SymbolizationJob]:
     """Claim due jobs and expired leases without allowing two active owners."""
-    observed = now or datetime.now(UTC)
+    observed = await lease_claim_time(session, now)
     claimable = or_(
         and_(
             SymbolizationJob.status == SYMBOL_STATUS_PENDING,
@@ -165,9 +166,37 @@ async def claim_symbolization_batch(
         job.status = SYMBOL_STATUS_PROCESSING
         job.lease_owner = owner
         job.lease_expires_at = lease_expiry
-        job.attempt_count += 1
     await session.flush()
     return jobs
+
+
+async def start_symbolization_attempt(
+    session: AsyncSession,
+    owner: str,
+    job: SymbolizationJob,
+    max_attempts: int,
+    now: datetime | None = None,
+) -> bool:
+    """Spend retry budget only when an active claim has an artifact and will run a tool."""
+    observed = lease_write_time(session, now)
+    count = await session.scalar(
+        update(SymbolizationJob)
+        .where(
+            SymbolizationJob.id == job.id,
+            SymbolizationJob.status == SYMBOL_STATUS_PROCESSING,
+            SymbolizationJob.lease_owner == owner,
+            SymbolizationJob.lease_expires_at > observed,
+            SymbolizationJob.attempt_count == job.attempt_count,
+            SymbolizationJob.attempt_count < max_attempts,
+        )
+        .values(attempt_count=SymbolizationJob.attempt_count + 1, updated_at=observed)
+        .returning(SymbolizationJob.attempt_count)
+        .execution_options(synchronize_session=False)
+    )
+    if count is None:
+        return False
+    job.attempt_count = count
+    return True
 
 
 async def resolve_artifact(session: AsyncSession, job: SymbolizationJob) -> SymbolArtifact | None:
@@ -232,23 +261,26 @@ async def mark_symbols_missing(
     owner: str,
     job_id: int,
     error_message: str,
+    now: datetime | None = None,
 ) -> bool:
     """Park an owned job until the exact artifact is uploaded; keep raw export waiting."""
+    observed = lease_write_time(session, now)
     result = await session.execute(
         update(SymbolizationJob)
         .where(
             SymbolizationJob.id == job_id,
             SymbolizationJob.status == SYMBOL_STATUS_PROCESSING,
             SymbolizationJob.lease_owner == owner,
+            SymbolizationJob.lease_expires_at > observed,
         )
         .values(
             status=SYMBOL_STATUS_SYMBOLS_MISSING,
-            next_attempt_at=utc_now() + timedelta(seconds=SYMBOL_ARTIFACT_RECHECK_SECONDS),
+            next_attempt_at=observed + timedelta(seconds=SYMBOL_ARTIFACT_RECHECK_SECONDS),
             lease_owner=None,
             lease_expires_at=None,
             last_error_code="symbols_missing",
             last_error_message=error_message[:MAX_EXPORT_ERROR_LENGTH],
-            updated_at=utc_now(),
+            updated_at=observed,
         )
     )
     return bool(result.rowcount)  # type: ignore[attr-defined]
@@ -263,14 +295,17 @@ async def mark_symbolized(
     fingerprint_sha256: str,
     tool_name: str,
     tool_version: str,
+    now: datetime | None = None,
 ) -> bool:
     """Persist deterministic output and release the corresponding inbox row for OTLP export."""
+    observed = lease_write_time(session, now)
     changed = await session.execute(
         update(SymbolizationJob)
         .where(
             SymbolizationJob.id == job.id,
             SymbolizationJob.status == SYMBOL_STATUS_PROCESSING,
             SymbolizationJob.lease_owner == owner,
+            SymbolizationJob.lease_expires_at > observed,
         )
         .values(
             status=SYMBOL_STATUS_SYMBOLIZED,
@@ -283,7 +318,7 @@ async def mark_symbolized(
             lease_expires_at=None,
             last_error_code=None,
             last_error_message=None,
-            updated_at=utc_now(),
+            updated_at=observed,
         )
     )
     if not changed.rowcount:  # type: ignore[attr-defined]
@@ -300,8 +335,10 @@ async def mark_symbolization_failed(
     max_attempts: int,
     error_code: str,
     error_message: str,
+    now: datetime | None = None,
 ) -> bool:
     """Retry an owned tool failure or finalize it and release raw crash export."""
+    observed = lease_write_time(session, now)
     should_retry = retryable and job.attempt_count < max_attempts
     delay = min(2 ** min(job.attempt_count, 8), MAX_SYMBOL_BACKOFF_SECONDS)
     result = await session.execute(
@@ -310,15 +347,16 @@ async def mark_symbolization_failed(
             SymbolizationJob.id == job.id,
             SymbolizationJob.status == SYMBOL_STATUS_PROCESSING,
             SymbolizationJob.lease_owner == owner,
+            SymbolizationJob.lease_expires_at > observed,
         )
         .values(
             status=SYMBOL_STATUS_PENDING if should_retry else SYMBOL_STATUS_FAILED,
-            next_attempt_at=utc_now() + timedelta(seconds=delay),
+            next_attempt_at=observed + timedelta(seconds=delay),
             lease_owner=None,
             lease_expires_at=None,
             last_error_code=error_code[:128],
             last_error_message=error_message[:MAX_EXPORT_ERROR_LENGTH],
-            updated_at=utc_now(),
+            updated_at=observed,
         )
     )
     if not result.rowcount:  # type: ignore[attr-defined]

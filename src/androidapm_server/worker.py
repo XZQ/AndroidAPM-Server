@@ -10,6 +10,7 @@ import uuid
 import structlog
 
 from androidapm_server.config import get_settings
+from androidapm_server.db.leases import new_lease_owner
 from androidapm_server.db.maintenance import maintain_once
 from androidapm_server.db.models import InboxEvent
 from androidapm_server.db.session import get_session_factory
@@ -29,6 +30,7 @@ async def export_once(client: OtlpLogsClient, owner: str) -> int:
     settings = get_settings()
     if not settings.export_enabled:
         return 0
+    owner = new_lease_owner(owner)
     factory = get_session_factory()
     async with factory() as session:
         events = await claim_batch(

@@ -24,6 +24,16 @@
 
 9. 保留/容量准入：终态 raw 清理、保留原 hash/HMAC 去重、quota 过期、事务审计、raw 410、行数/字节阈值和失败回滚；新增迁移 0005 与 ADR 0008。140 个后端测试、前端四门禁（12 tests）和 SQLite 五版迁移 upgrade/check/downgrade/upgrade/check 通过。操作只在隔离测试数据库执行，未清理任何外部数据。
 
+10. 符号化租约：执行前逐个领取、每次独立 token、数据库时钟与过期写入保护、整项处理截止时间、工具取消/超时终止回收、缺制品轮询不消耗工具次数、崩溃重领不超预算；符号化指标在提交后增加。23 个相关回归通过，覆盖同进程旧结果写回、排队期间未占租约、缺制品等待、过期完成/失败以及真实子进程取消。导出完成/失败同步加上未过期租约保护。
+
+### 最终验证
+
+2026-09-07 完整执行依赖锁同步、Ruff、mypy（55 source files）、pytest（150 passed）、12 份文档校验、前端 lint/typecheck/test/build（12 tests）与 diff check，退出码均为 0。pytest 仍有 Windows Temp 退出清理权限告警，不计为测试失败。
+
+以客户端当前干净的 `develop@90dd147` 运行真实 `tools/verify_collector_e2e.py`：Gradle 构建、五版 SQLite migration、真实 `HttpApmUploader` V2/V3 Gzip、exact ACK、typed/occurrence/HMAC 持久化与重复重放全部通过。客户端代码及 Git 状态在本轮验证前后保持一致。
+
+独立执行 `uv run pytest integration_tests -rs`，5 项因未配置 `APM_TEST_POSTGRES_URL` 跳过。本机 Docker/Podman/psql 均不可用，未执行容器构建、Compose、PostgreSQL/SigNoz/TLS 现场验收；这些仍是部署门禁。当前 CI 只触发 main push 或面向 main 的 PR，因此推送功能分支不能视为远端 CI 已通过。
+
 ## 2026-09-04 多路由 APM 控制台与 Issue 聚合（历史）
 
 本轮把原有发布健康长页面升级为同源多路由诊断控制台：总览、Issues、Issue 详情、investigator 事件探索/详情、版本发布和数据质量均有独立可恢复 URL；性能、告警和设置以 `UNAVAILABLE`/`UNCONFIGURED` 页面公开真实建设边界。viewer 导航不显示事件枚举入口，直接访问事件页也只返回权限说明；L2 raw 不自动读取，仍要求 purpose/reason 并等待服务端审计提交。
@@ -61,7 +71,7 @@ Query/BFF 新增 `GET /v1/query/issues/{fingerprint}`，在固定 scope 和有�
 - 独立 `apmci1` CI key 与 `artifact:write` scope；Java mapping/未剥离 Native ELF 的有界流式上传、SHA-256、格式/ABI/.symtab/GNU build-id 校验、精确身份幂等与冲突审计。
 - Crash durable symbolization job：metadata_missing、awaiting_symbols、symbols_missing、制品上传重排队、owner/lease/expiry、retry/final failure 和 OTLP 符号状态/指纹映射。
 - R8 retrace/llvm-symbolizer 固定 JSON argv adapter：不经过 shell，限制运行时间和输出，保存工具版本；symbolizer 默认关闭且工具由部署镜像提供。
-- 三版 Alembic schema、非 root 只读容器、Gateway/export worker/symbolizer/PostgreSQL Compose、共享私有制品卷和官方 SigNoz/Foundry 版本边界。
+- 五版 Alembic schema、非 root 只读容器、Gateway/export worker/symbolizer/PostgreSQL Compose、共享私有制品卷和官方 SigNoz/Foundry 版本边界。
 
 ## 2026-08-28 V3、Query/BFF 与真实跨仓闭环
 
@@ -184,4 +194,4 @@ uv run python scripts/verify_docs.py
 2. 修正真实 SigNoz 返回的任何 dashboard/rule schema/query 差异并保存截图/请求证据。
 3. 构建固定 R8/LLVM 工具镜像，接 S3 兼容对象存储/KMS，用真实 Java 与每 ABI Native 样本完成符号化 E2E。
 4. 用真实跨升级 outbox、Java mapping 和每 ABI Native crash fixture 验收 occurrence/build/native identity coverage，完成 SDK→Gateway→symbolizer→SigNoz 联调。
-5. 补生产 RLS、retention/prune、备份恢复、故障注入、容量/性能和安全门禁。
+5. 补生产 RLS、已实现 retention/backpressure 的现场容量验收、备份恢复、故障注入、容量/性能和安全门禁。

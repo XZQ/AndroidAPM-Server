@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,7 @@ from androidapm_server.constants import (
     INBOX_STATUS_PROCESSING,
     MAX_EXPORT_ERROR_LENGTH,
 )
+from androidapm_server.db.leases import lease_claim_time, lease_write_time
 from androidapm_server.db.models import InboxEvent
 
 MAX_BACKOFF_SECONDS = 300
@@ -28,7 +29,7 @@ async def claim_batch(
     now: datetime | None = None,
 ) -> list[InboxEvent]:
     """Claim due pending rows and expired leases for one worker owner."""
-    observed = now or datetime.now(UTC)
+    observed = await lease_claim_time(session, now)
     claimable = or_(
         and_(
             InboxEvent.status == INBOX_STATUS_PENDING,
@@ -67,17 +68,19 @@ async def mark_delivered(
     """Complete rows only when the caller still owns their active processing lease."""
     if not event_ids:
         return 0
+    observed = lease_write_time(session, now)
     result = await session.execute(
         update(InboxEvent)
         .where(
             InboxEvent.id.in_(event_ids),
             InboxEvent.status == INBOX_STATUS_PROCESSING,
             InboxEvent.lease_owner == owner,
+            InboxEvent.lease_expires_at > observed,
         )
         .values(
             status=INBOX_STATUS_DELIVERED,
-            delivered_at=now or datetime.now(UTC),
-            finalized_at=now or datetime.now(UTC),
+            delivered_at=observed,
+            finalized_at=observed,
             lease_owner=None,
             lease_expires_at=None,
             last_error_code=None,
@@ -99,7 +102,7 @@ async def mark_failed(
     now: datetime | None = None,
 ) -> int:
     """Retry or dead-letter owned rows without allowing stale owners to mutate them."""
-    observed = now or datetime.now(UTC)
+    observed = lease_write_time(session, now)
     changed = 0
     for event in events:
         should_retry = retryable and event.attempt_count < max_attempts
@@ -110,6 +113,7 @@ async def mark_failed(
                 InboxEvent.id == event.id,
                 InboxEvent.status == INBOX_STATUS_PROCESSING,
                 InboxEvent.lease_owner == owner,
+                InboxEvent.lease_expires_at > observed,
             )
             .values(
                 status=INBOX_STATUS_PENDING if should_retry else INBOX_STATUS_DEAD_LETTER,

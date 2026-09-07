@@ -60,7 +60,10 @@ async def test_only_owner_can_complete_and_expired_lease_is_reclaimed(
     await session.commit()
     assert len(reclaimed) == 1
     assert reclaimed[0].attempt_count == 2
-    assert await mark_delivered(session, "owner-b", [reclaimed[0].id], NOW) == 1
+    assert (
+        await mark_delivered(session, "owner-b", [reclaimed[0].id], NOW + timedelta(seconds=62))
+        == 1
+    )
     await session.commit()
     row = await session.scalar(select(InboxEvent))
     assert row is not None and row.status == "delivered"
@@ -70,17 +73,45 @@ async def test_only_owner_can_complete_and_expired_lease_is_reclaimed(
 async def test_retry_then_dead_letter_after_attempt_limit(session: AsyncSession) -> None:
     claimed = await claim_batch(session, "owner", 1, 60, NOW)
     await session.commit()
-    assert await mark_failed(
-        session, "owner", claimed, True, 2, "http_503", "temporary", now=NOW
-    ) == 1
+    assert (
+        await mark_failed(session, "owner", claimed, True, 2, "http_503", "temporary", now=NOW) == 1
+    )
     await session.commit()
     row = await session.scalar(select(InboxEvent))
     assert row is not None and row.status == "pending"
 
     reclaimed = await claim_batch(session, "owner", 1, 60, NOW + timedelta(seconds=3))
     await session.commit()
-    assert await mark_failed(
-        session, "owner", reclaimed, True, 2, "http_503", "temporary", now=NOW
-    ) == 1
+    assert (
+        await mark_failed(
+            session,
+            "owner",
+            reclaimed,
+            True,
+            2,
+            "http_503",
+            "temporary",
+            now=NOW + timedelta(seconds=4),
+        )
+        == 1
+    )
     await session.commit()
     assert row.status == "dead_letter"
+
+
+@pytest.mark.asyncio
+async def test_expired_export_owner_cannot_complete_or_fail_before_reclaim(
+    session: AsyncSession,
+) -> None:
+    claimed = await claim_batch(session, "owner", 1, 60, NOW)
+    await session.commit()
+    expired = NOW + timedelta(seconds=60)
+    assert await mark_delivered(session, "owner", [claimed[0].id], expired) == 0
+    assert (
+        await mark_failed(session, "owner", claimed, False, 2, "failed", "failure", now=expired)
+        == 0
+    )
+    await session.commit()
+    row = await session.get(InboxEvent, claimed[0].id)
+    assert row is not None and row.status == "processing"
+    assert row.finalized_at is None and row.last_error_code is None

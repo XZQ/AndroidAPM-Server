@@ -20,21 +20,23 @@ This is the repository-local handoff entry for AndroidAPM-Server. Source code, m
 12. `docs/云端待建设清单.md`
 13. `docs/adr/0006-发生时身份与installation假名化.md`
 14. `docs/adr/0007-同源Web控制台与短时会话.md`
+15. `docs/adr/0008-保留策略与容量准入.md`
 
 ## Current verified baseline
 
-- Baseline date: `2026-09-04`
+- Baseline date: `2026-09-07`
 - Branch: `codex/server-foundation`
 - Runtime: Python `3.11.15`, FastAPI `0.139.0`, SQLAlchemy `2.0.51`
 - Persistence: PostgreSQL production model; SQLite is used only for fast compatibility tests
-- Telemetry target: OTLP/HTTP Logs to SigNoz `v0.133.0`, installed with Foundry `v0.2.13`
-- Schema: append-only Alembic revisions `20260716_0001`, `20260716_0002`, and `20260828_0003`
+- Telemetry target: OTLP/HTTP Logs to SigNoz `v0.133.0`, installation method pinned to Foundry `v0.2.13`; deployment remains unverified
+- Schema: append-only Alembic revisions `20260716_0001`, `20260716_0002`, `20260828_0003`, `20260907_0004`, and `20260907_0005`
 - Collector V2/V3: typed explicit envelopes and exact post-commit schema/batch/count ACK; V3 carries occurrence-bound release/installation/native identity
 - Identity: V2/V3 installation values are replaced before persistence by a tenant/domain-separated, versioned HMAC; V3 release identity is stored as `OCCURRENCE_BOUND`
 - Query/BFF: fixed-scope `apmq1` viewer/investigator credentials, bounded release-health/fingerprint/Issue-detail/data-quality queries, investigator-only event/raw access, audited human release decisions, and HMAC-bound cursors
 - Web console: React/TypeScript/Vite same-origin routed console for overview, Issues/detail, event exploration/detail, releases, quality, and explicit capability gaps; raw `apmq1` is exchanged once for a revocable, short-lived HttpOnly session with bound CSRF protection
-- Symbolization: independent CI keys, private-volume artifact adapter, durable jobs, fixed-argv tool adapters; disabled by default until audited R8/LLVM tools are deployed
-- Local verification: dependency sync, Ruff, mypy over 51 source files, 96 backend tests, 12 required documents, all four frontend gates with 9 Vitest tests, routed-console desktop/mobile browser smoke, and diff checks pass; the earlier three-revision migration round-trip/check remains valid historical evidence
+- Symbolization: independent CI keys, private-volume artifact adapter, just-in-time single-job claims, unique claim tokens, database-clock expiry fencing, bounded job deadlines and cancellation cleanup; missing-artifact polls spend no tool attempts; disabled by default until audited R8/LLVM tools are deployed
+- Operations: bounded asynchronous key verification, real database backlog snapshots, separate private worker metrics listeners, terminal raw retention with replay metadata preserved, and transactional ingest capacity backpressure
+- Local verification: dependency sync, Ruff, mypy over 55 source files, 150 backend tests, 12 required documents, all four frontend gates with 12 Vitest tests, five-revision SQLite migration checks and real Android uploader E2E pass; routed-console desktop/mobile browser smoke remains historical 2026-09-04 evidence
 - Verification: a real Android `HttpApmUploader` V2/V3 loopback E2E proves Gzip/exact ACK/typed and occurrence persistence/HMAC/replay against test-only SQLite; do not infer Docker/PostgreSQL/TLS/SigNoz deployment from it
 
 ## Non-negotiable invariants

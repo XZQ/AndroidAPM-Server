@@ -56,9 +56,7 @@ async def symbolize_job(
     if job.job_type == SYMBOL_JOB_JAVA:
         stack = _stack_from_payload(job, ("stackTrace", "stack_trace"))
         command = _parse_command(retrace_command_json, "retrace")
-        output = await _run_tool(
-            [*command, str(artifact_path)], stack.encode(), timeout_seconds
-        )
+        output = await _run_tool([*command, str(artifact_path)], stack.encode(), timeout_seconds)
         return _result(output, Path(command[0]).name, retrace_tool_version)
     if job.job_type == SYMBOL_JOB_NATIVE:
         stack = _stack_from_payload(job, ("backtrace",))
@@ -133,9 +131,16 @@ async def _run_tool(args: list[str], standard_input: bytes, timeout_seconds: flo
         stdout, stderr = await asyncio.wait_for(
             process.communicate(standard_input), timeout=timeout_seconds
         )
-    except TimeoutError as error:
-        process.kill()
+    except (TimeoutError, asyncio.CancelledError) as error:
+        # Lease deadlines and shutdown cancellation must not leave a tool running.
+        if process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass  # The process may have exited between the returncode check and kill.
         await process.communicate()
+        if isinstance(error, asyncio.CancelledError):
+            raise
         raise SymbolizationFailure(
             "tool_timeout", "The symbolization tool exceeded its time limit", True
         ) from error
@@ -163,9 +168,7 @@ async def _run_tool(args: list[str], standard_input: bytes, timeout_seconds: flo
 
 def _result(output: str, tool_name: str, tool_version: str) -> SymbolizationResult:
     """Build a stable fingerprint from bounded non-empty symbolized lines."""
-    normalized = "\n".join(
-        line.strip() for line in output.splitlines() if line.strip()
-    )
+    normalized = "\n".join(line.strip() for line in output.splitlines() if line.strip())
     fingerprint_input = "\n".join(normalized.splitlines()[:MAX_FINGERPRINT_LINES])
     return SymbolizationResult(
         {"symbolizedStack": normalized},

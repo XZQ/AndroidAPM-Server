@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sys
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -31,10 +33,12 @@ from androidapm_server.db.models import InboxEvent, SymbolArtifact, Symbolizatio
 from androidapm_server.db.symbolization import (
     claim_symbolization_batch,
     enqueue_symbolization_jobs,
+    mark_symbolization_failed,
     mark_symbolized,
     mark_symbols_missing,
     requeue_matching_missing_jobs,
     resolve_artifact,
+    start_symbolization_attempt,
 )
 from androidapm_server.domain import (
     ApmEvent,
@@ -43,7 +47,7 @@ from androidapm_server.domain import (
     OccurrenceContext,
 )
 from androidapm_server.identity import InstallationHmacKeyRing
-from androidapm_server.symbolization import SymbolizationFailure, symbolize_job
+from androidapm_server.symbolization import SymbolizationFailure, _run_tool, symbolize_job
 
 TEST_KEY_RING = InstallationHmacKeyRing.parse(
     '{"v1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}',
@@ -189,6 +193,7 @@ async def test_missing_artifact_is_requeued_then_symbolized_by_active_owner(
         jobs = await claim_symbolization_batch(session, "owner-a", 1, 60, datetime.now(UTC))
         await session.commit()
     assert len(jobs) == 1
+    assert jobs[0].attempt_count == 0
     async with factory() as session:
         assert await resolve_artifact(session, jobs[0]) is None
         assert await mark_symbols_missing(session, "owner-a", jobs[0].id, "missing")
@@ -202,6 +207,7 @@ async def test_missing_artifact_is_requeued_then_symbolized_by_active_owner(
             datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=61),
         )
         assert len(periodic) == 1
+        assert periodic[0].attempt_count == 0
         assert await mark_symbols_missing(
             session, "periodic-owner", periodic[0].id, "still missing"
         )
@@ -411,3 +417,85 @@ async def test_tool_adapters_use_argv_and_produce_stable_fingerprints(tmp_path: 
             "test-llvm",
             5,
         )
+
+
+@pytest.mark.asyncio
+async def test_expired_symbol_claim_cannot_start_park_succeed_or_fail(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    event = crash_event("expired")
+    async with factory() as session:
+        await insert_batch(session, metadata(), [event], TEST_KEY_RING)
+        await enqueue_symbolization_jobs(session, metadata(), [event])
+        await session.commit()
+    observed = datetime.now(UTC)
+    expired = observed + timedelta(seconds=60)
+    async with factory() as session:
+        jobs = await claim_symbolization_batch(session, "old-claim", 1, 60, observed)
+        await session.commit()
+    job = jobs[0]
+    async with factory() as session:
+        assert not await start_symbolization_attempt(session, "old-claim", job, 3, expired)
+        assert not await mark_symbols_missing(session, "old-claim", job.id, "missing", expired)
+        assert not await mark_symbolization_failed(
+            session, "old-claim", job, False, 3, "failed", "failure", expired
+        )
+        assert not await mark_symbolized(
+            session, "old-claim", job, 1, {}, "b" * 64, "retrace", "test", expired
+        )
+        await session.commit()
+    async with factory() as session:
+        current = (await claim_symbolization_batch(session, "new-claim", 1, 60, expired))[0]
+        assert current.attempt_count == 0
+        assert await start_symbolization_attempt(session, "new-claim", current, 3, expired)
+        await session.commit()
+    async with factory() as session:
+        assert not await mark_symbolization_failed(
+            session, "old-claim", job, False, 3, "stale", "failure", expired
+        )
+        assert await mark_symbolization_failed(
+            session, "new-claim", current, False, 3, "failed", "failure", expired
+        )
+        await session.commit()
+    async with factory() as session:
+        inbox = await session.scalar(select(InboxEvent))
+        assert inbox is not None and inbox.status == INBOX_STATUS_PENDING
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [True, False])
+async def test_tool_process_is_killed_and_reaped_on_cancellation_or_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    cancel: bool,
+) -> None:
+    created = asyncio.Event()
+    processes: list[asyncio.subprocess.Process] = []
+    real_spawn = asyncio.create_subprocess_exec
+
+    async def observe_spawn(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await real_spawn(*args, **kwargs)
+        processes.append(process)
+        created.set()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observe_spawn)
+    task = asyncio.create_task(
+        _run_tool(
+            [sys.executable, "-c", "import time; time.sleep(30)"], b"", 60 if cancel else 0.05
+        )
+    )
+    try:
+        await asyncio.wait_for(created.wait(), timeout=10)
+        if cancel:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=10)
+        else:
+            with pytest.raises(SymbolizationFailure) as error:
+                await asyncio.wait_for(task, timeout=10)
+            assert error.value.code == "tool_timeout" and error.value.retryable
+        assert len(processes) == 1 and processes[0].returncode is not None
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

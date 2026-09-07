@@ -1,20 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from androidapm_server import symbolizer_worker
 from androidapm_server.config import Settings
 from androidapm_server.constants import (
     ARTIFACT_TYPE_JAVA_MAPPING,
     INBOX_STATUS_AWAITING_SYMBOLS,
     INBOX_STATUS_PENDING,
+    SYMBOL_STATUS_FAILED,
     SYMBOL_STATUS_PENDING,
+    SYMBOL_STATUS_PROCESSING,
     SYMBOL_STATUS_SYMBOLIZED,
     SYMBOL_STATUS_SYMBOLS_MISSING,
 )
@@ -24,6 +29,7 @@ from androidapm_server.db.models import InboxEvent, SymbolArtifact, Symbolizatio
 from androidapm_server.db.symbolization import enqueue_symbolization_jobs
 from androidapm_server.domain import ApmEvent, IngestMetadata, OccurrenceContext
 from androidapm_server.identity import InstallationHmacKeyRing
+from androidapm_server.metrics import SYMBOLIZATION_JOBS
 from androidapm_server.symbolization import SymbolizationFailure, SymbolizationResult
 from androidapm_server.symbolizer_worker import symbolize_once
 
@@ -114,7 +120,7 @@ def configure_worker(
     monkeypatch: pytest.MonkeyPatch,
     factory: async_sessionmaker[AsyncSession],
     tmp_path: Path,
-) -> None:
+) -> Settings:
     settings = Settings(
         database_url="sqlite+aiosqlite:///:memory:",
         environment="test",
@@ -124,6 +130,7 @@ def configure_worker(
     )
     monkeypatch.setattr("androidapm_server.symbolizer_worker.get_settings", lambda: settings)
     monkeypatch.setattr("androidapm_server.symbolizer_worker.get_session_factory", lambda: factory)
+    return settings
 
 
 @pytest.mark.asyncio
@@ -190,6 +197,171 @@ async def test_worker_retries_transient_tool_failure_without_releasing_raw_event
         assert inbox is not None and inbox.status == INBOX_STATUS_AWAITING_SYMBOLS
 
 
-def test_symbolizer_timeout_cannot_outlive_lease() -> None:
+@pytest.mark.parametrize("timeout", [120, 115])
+def test_symbolizer_timeout_cannot_outlive_lease(timeout: int) -> None:
     with pytest.raises(ValueError, match="timeout must be shorter"):
-        Settings(symbolizer_timeout_seconds=120, symbolizer_lease_seconds=120)
+        Settings(symbolizer_timeout_seconds=timeout, symbolizer_lease_seconds=120)
+
+
+def tool_result(stack: str = "Real.run(Real.kt:10)") -> SymbolizationResult:
+    return SymbolizationResult({"symbolizedStack": stack}, "b" * 64, "retrace", "test-r8")
+
+
+@pytest.mark.asyncio
+async def test_waiting_jobs_keep_their_entire_lease_and_retry_budget(
+    factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    await seed_job(factory, "first", artifact=True)
+    await seed_job(factory, "second", artifact=False)
+    await seed_job(factory, "third", artifact=False)
+    configure_worker(monkeypatch, factory, tmp_path)
+    completed: list[str] = []
+
+    async def check_queue(job: SymbolizationJob, *_: object) -> SymbolizationResult:
+        async with factory() as session:
+            rows = list((await session.scalars(select(SymbolizationJob))).all())
+        assert [row.event_id for row in rows if row.status == SYMBOL_STATUS_PROCESSING] == [
+            job.event_id
+        ]
+        for row in rows:
+            if row.event_id not in [*completed, job.event_id]:
+                assert row.status == SYMBOL_STATUS_PENDING
+                assert row.lease_owner is None and row.lease_expires_at is None
+                assert row.attempt_count == 0
+        completed.append(job.event_id)
+        return tool_result()
+
+    monkeypatch.setattr(symbolizer_worker, "symbolize_job", check_queue)
+    assert await symbolize_once("owner") == 3
+    assert completed == ["first", "second", "third"]
+
+
+@pytest.mark.asyncio
+async def test_missing_artifact_polls_do_not_exhaust_tool_retries(
+    factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    await seed_job(factory, "missing", artifact=False)
+    configure_worker(monkeypatch, factory, tmp_path)
+    for _ in range(4):
+        assert await symbolize_once("owner") == 1
+        async with factory() as session:
+            job = await session.scalar(select(SymbolizationJob))
+            assert job is not None and job.status == SYMBOL_STATUS_SYMBOLS_MISSING
+            assert job.attempt_count == 0
+            job.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+            await session.commit()
+
+    # Replay the same event and register its artifact, then encounter the first tool failure.
+    await seed_job(factory, "missing", artifact=True)
+    monkeypatch.setattr(
+        symbolizer_worker,
+        "symbolize_job",
+        AsyncMock(side_effect=SymbolizationFailure("tool_unavailable", "missing", True)),
+    )
+    assert await symbolize_once("owner") == 1
+    async with factory() as session:
+        job = await session.scalar(select(SymbolizationJob))
+        assert job is not None and job.status == SYMBOL_STATUS_PENDING
+        assert job.attempt_count == 1 and job.last_error_code == "tool_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_reclaimed_attempt_in_same_worker_fences_old_result_and_metrics(
+    factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    await seed_job(factory, "reclaim", artifact=True)
+    settings = configure_worker(monkeypatch, factory, tmp_path)
+    settings.symbolizer_batch_size = 1
+    owners: list[str | None] = []
+    counter = SYMBOLIZATION_JOBS.labels("symbolized", "java")
+    before = counter._value.get()
+
+    async def finish_out_of_order(job: SymbolizationJob, *_: object) -> SymbolizationResult:
+        owners.append(job.lease_owner)
+        if len(owners) == 1:
+            async with factory() as session:
+                await session.execute(
+                    update(SymbolizationJob)
+                    .where(SymbolizationJob.id == job.id)
+                    .values(lease_expires_at=datetime.now(UTC) - timedelta(seconds=1))
+                )
+                await session.commit()
+            assert await symbolize_once("same-worker" * 20) == 1
+            return tool_result("stale result")
+        return tool_result("current result")
+
+    monkeypatch.setattr(symbolizer_worker, "symbolize_job", finish_out_of_order)
+    assert await symbolize_once("same-worker" * 20) == 0
+    assert len(owners) == 2 and owners[0] != owners[1]
+    assert all(owner is not None and len(owner) <= 128 for owner in owners)
+    assert counter._value.get() - before == 1
+    async with factory() as session:
+        job = await session.scalar(select(SymbolizationJob))
+        assert job is not None and job.result_json == {"symbolizedStack": "current result"}
+        assert job.attempt_count == 2
+
+
+@pytest.mark.asyncio
+async def test_final_attempt_crash_does_not_grant_another_tool_run(
+    factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    await seed_job(factory, "exhausted", artifact=True)
+    configure_worker(monkeypatch, factory, tmp_path)
+    async with factory() as session:
+        await session.execute(
+            update(SymbolizationJob).values(
+                status=SYMBOL_STATUS_PROCESSING,
+                lease_owner="crashed-worker",
+                attempt_count=3,
+                lease_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+            )
+        )
+        await session.commit()
+    tool = AsyncMock()
+    monkeypatch.setattr(symbolizer_worker, "symbolize_job", tool)
+    assert await symbolize_once("owner") == 1
+    tool.assert_not_awaited()
+    async with factory() as session:
+        job = await session.scalar(select(SymbolizationJob))
+        inbox = await session.scalar(select(InboxEvent))
+        assert job is not None and job.status == SYMBOL_STATUS_FAILED
+        assert job.last_error_code == "symbolizer_attempts_exhausted" and job.attempt_count == 3
+        assert inbox is not None and inbox.status == INBOX_STATUS_PENDING
+
+
+@pytest.mark.asyncio
+async def test_lease_deadline_also_bounds_artifact_resolution(
+    factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    await seed_job(factory, "slow-resolution", artifact=True)
+    settings = configure_worker(monkeypatch, factory, tmp_path)
+    settings.symbolizer_batch_size = 1
+    cancelled = asyncio.Event()
+
+    async def stalled_lookup(*_: object) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    # Accelerate only the monotonic execution deadline; the persisted lease stays valid.
+    real_timeout = asyncio.timeout
+    monkeypatch.setattr(symbolizer_worker.asyncio, "timeout_at", lambda _: real_timeout(0.05))
+    monkeypatch.setattr(symbolizer_worker, "resolve_artifact", stalled_lookup)
+    assert await symbolize_once("owner") == 1
+    assert cancelled.is_set()
+    async with factory() as session:
+        job = await session.scalar(select(SymbolizationJob))
+        assert job is not None and job.status == SYMBOL_STATUS_PENDING
+        assert job.last_error_code == "symbolizer_lease_budget_exhausted"
+        assert job.attempt_count == 0

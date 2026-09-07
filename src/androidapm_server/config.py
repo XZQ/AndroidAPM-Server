@@ -10,6 +10,8 @@ from pathlib import Path
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from androidapm_server.constants import SYMBOLIZER_FINALIZE_MARGIN_SECONDS
+
 
 class Settings(BaseSettings):
     """Validated application settings using the ``APM_`` prefix."""
@@ -99,8 +101,11 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def symbolizer_timeout_must_fit_lease(self) -> Settings:
         """Validate cross-field worker and production Web security constraints."""
-        if self.symbolizer_timeout_seconds >= self.symbolizer_lease_seconds:
-            raise ValueError("symbolizer timeout must be shorter than its lease")
+        if (
+            self.symbolizer_timeout_seconds + SYMBOLIZER_FINALIZE_MARGIN_SECONDS
+            >= self.symbolizer_lease_seconds
+        ):
+            raise ValueError("symbolizer timeout must be shorter than its lease by over 5 seconds")
         if self.environment.lower() == "production":
             if not self.web_session_cookie_secure:
                 raise ValueError("production Web sessions require secure cookies")
