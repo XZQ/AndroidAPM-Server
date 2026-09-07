@@ -146,7 +146,7 @@ export function OverviewPage() {
                     <td><strong>{item.eventFamily}</strong></td>
                     <td><code>{shortId(item.fingerprint, 9)}</code></td>
                     <td>{item.eventCount}</td>
-                    <td>{item.affectedInstallationCount}</td>
+                    <td>{item.affectedInstallationCount ?? "—"}</td>
                     <td>{formatDateTime(item.firstSeenMs)}<small>{formatDateTime(item.lastSeenMs)}</small></td>
                     <td><Link aria-label={`查看 ${item.eventFamily} 详情`} to={`${appPath}/issues/${item.fingerprint}`}><ArrowRight size={16} /></Link></td>
                   </tr>

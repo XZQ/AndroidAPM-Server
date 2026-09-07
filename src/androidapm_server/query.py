@@ -149,7 +149,7 @@ class FingerprintItem(QueryModel):
     fingerprint: str
     event_family: str
     event_count: int
-    affected_installation_count: int
+    affected_installation_count: int | None
     first_seen_ms: int
     last_seen_ms: int
 
@@ -164,6 +164,7 @@ class FingerprintResponse(QueryModel):
     state: str
     sample_count: int
     fingerprint_coverage: float | None
+    installation_reason: str | None = None
     items: list[FingerprintItem]
 
 
@@ -172,7 +173,7 @@ class IssueDistributionItem(QueryModel):
 
     label: str
     event_count: int
-    affected_installation_count: int
+    affected_installation_count: int | None
 
 
 class IssueDistribution(QueryModel):
@@ -190,7 +191,7 @@ class IssueTrendPoint(QueryModel):
     bucket_start_ms: int
     bucket_end_ms: int
     event_count: int
-    affected_installation_count: int
+    affected_installation_count: int | None
 
 
 class IssueDetailResponse(QueryModel):
@@ -204,7 +205,7 @@ class IssueDetailResponse(QueryModel):
     reason: str | None = None
     event_family: str | None = None
     event_count: int
-    affected_installation_count: int
+    affected_installation_count: int | None
     first_seen_ms: int | None = None
     last_seen_ms: int | None = None
     trend: list[IssueTrendPoint]
@@ -383,6 +384,32 @@ def build_release_health(
     baseline_slice = _release_slice(
         facts, baseline_release, to_ms, late_after_ms, min_installations, min_sdk_health_coverage
     )
+    continuity_reason = _installation_continuity_reason(
+        [
+            fact
+            for fact in facts
+            if fact.app_version in {new_release, baseline_release} and _occurrence_bound(fact)
+        ]
+    )
+    if continuity_reason:
+        for release in (new_slice, baseline_slice):
+            if release.eligible_sample_count:
+                release.state = QUERY_STATE_UNAVAILABLE
+                for field in (
+                    "active_installations",
+                    "affected_installations",
+                    "affected_installation_ratio",
+                ):
+                    setattr(
+                        release.metrics,
+                        field,
+                        _metric(
+                            QUERY_STATE_UNAVAILABLE,
+                            to_ms,
+                            release.eligible_sample_count,
+                            reason=continuity_reason,
+                        ),
+                    )
     return ReleaseHealthResponse(
         request_id=request_id,
         scope=scope_for(principal),
@@ -441,9 +468,7 @@ def build_top_fingerprints(
             fingerprint=fingerprint,
             event_family=event_family,
             event_count=len(group),
-            affected_installation_count=len(
-                {fact.installation_hmac for fact in group if fact.installation_hmac is not None}
-            ),
+            affected_installation_count=_installation_count(group, eligible),
             first_seen_ms=min(fact.occurrence_timestamp_ms for fact in group),
             last_seen_ms=max(fact.occurrence_timestamp_ms for fact in group),
         )
@@ -463,6 +488,8 @@ def build_top_fingerprints(
         state = QUERY_STATE_DEGRADED
     else:
         state = QUERY_STATE_PRESENT
+    if _installation_continuity_reason(eligible) and incidents:
+        state = QUERY_STATE_DEGRADED
     return FingerprintResponse(
         request_id=request_id,
         scope=scope_for(principal),
@@ -471,6 +498,7 @@ def build_top_fingerprints(
         state=state,
         sample_count=len(incidents),
         fingerprint_coverage=coverage,
+        installation_reason=_installation_continuity_reason(eligible),
         items=items[:limit],
     )
 
@@ -499,6 +527,10 @@ def build_issue_detail(
     else:
         state = QUERY_STATE_PRESENT
         reason = None
+
+    continuity_reason = _installation_continuity_reason(eligible)
+    if eligible and continuity_reason:
+        state, reason = QUERY_STATE_UNAVAILABLE, continuity_reason
 
     families = {_event_family(fact.module, fact.name) for fact in eligible}
     event_family = next(iter(families)) if len(families) == 1 else "MIXED" if families else None
@@ -535,9 +567,7 @@ def build_issue_detail(
         reason=reason,
         event_family=event_family,
         event_count=len(eligible),
-        affected_installation_count=len(
-            {fact.installation_hmac for fact in eligible if fact.installation_hmac is not None}
-        ),
+        affected_installation_count=_installation_count(eligible, eligible),
         first_seen_ms=min((fact.occurrence_timestamp_ms for fact in eligible), default=None),
         last_seen_ms=max((fact.occurrence_timestamp_ms for fact in eligible), default=None),
         trend=_issue_trend(eligible, from_ms, to_ms),
@@ -565,9 +595,7 @@ def _issue_distribution(
         IssueDistributionItem(
             label=label,
             event_count=len(group),
-            affected_installation_count=len(
-                {fact.installation_hmac for fact in group if fact.installation_hmac is not None}
-            ),
+            affected_installation_count=_installation_count(group, facts),
         )
         for label, group in grouped.items()
     ]
@@ -615,9 +643,7 @@ def _issue_trend(
                 bucket_start_ms=bucket_start,
                 bucket_end_ms=min(bucket_start + bucket_ms, to_ms),
                 event_count=len(group),
-                affected_installation_count=len(
-                    {fact.installation_hmac for fact in group if fact.installation_hmac is not None}
-                ),
+                affected_installation_count=_installation_count(group, facts),
             )
         )
     return points
@@ -727,6 +753,12 @@ def build_data_quality(
             state = QUERY_STATE_UNAVAILABLE
         else:
             state = QUERY_STATE_PRESENT
+    continuity_reason = _installation_continuity_reason(selected)
+    if continuity_reason and selected:
+        state = QUERY_STATE_UNAVAILABLE
+        installation_metric = _metric(
+            QUERY_STATE_UNAVAILABLE, to_ms, sample_count, reason=continuity_reason
+        )
     return DataQualityResponse(
         request_id=request_id,
         scope=scope_for(principal),
@@ -1268,6 +1300,25 @@ def _ratio_delta(new: MetricResult, baseline: MetricResult) -> float | None:
     if isinstance(new.value, bool) or isinstance(baseline.value, bool):
         return None
     return float(new.value) - float(baseline.value)
+
+
+def _installation_continuity_reason(facts: list[QueryFact]) -> str | None:
+    """HMAC epochs cannot be joined without a separately authorized alias mechanism."""
+    identified = [fact for fact in facts if fact.installation_hmac is not None]
+    if any(fact.installation_hmac_key_version is None for fact in identified):
+        return "INSTALLATION_HMAC_VERSION_MISSING"
+    if len({fact.installation_hmac_key_version for fact in identified}) > 1:
+        return "INSTALLATION_HMAC_CONTINUITY_BREAK"
+    return None
+
+
+def _installation_count(facts: list[QueryFact], window: list[QueryFact]) -> int | None:
+    """Count distinct pseudonyms only within one verified key epoch and complete identity."""
+    if _installation_continuity_reason(window):
+        return None
+    if any(fact.installation_hmac is None for fact in facts):
+        return None
+    return len({fact.installation_hmac for fact in facts})
 
 
 def _occurrence_bound(fact: QueryFact) -> bool:

@@ -60,7 +60,7 @@ export function FingerprintList({
                   </td>
                   <td>{item.eventFamily}</td>
                   <td>{item.eventCount.toLocaleString("zh-CN")}</td>
-                  <td>{item.affectedInstallationCount.toLocaleString("zh-CN")}</td>
+                  <td>{item.affectedInstallationCount?.toLocaleString("zh-CN") ?? "不可用"}</td>
                   <td className="time-cell">
                     <span>{formatDateTime(item.firstSeenMs)}</span>
                     <span>{formatDateTime(item.lastSeenMs)}</span>

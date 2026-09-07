@@ -4,7 +4,7 @@ import { Link, useOutletContext } from "react-router-dom";
 
 import { getFingerprints } from "../../api";
 import { StateBadge } from "../../components/StateBadge";
-import { formatDateTime, formatPercent, shortId } from "../../format";
+import { formatDateTime, formatPercent, reasonLabel, shortId } from "../../format";
 import type { Fingerprints } from "../../types";
 import type { ConsoleContextValue } from "../context";
 import { useRequestGuard } from "../useRequestGuard";
@@ -52,6 +52,7 @@ export function IssuesPage() {
       {error !== null ? <ErrorPanel message={error} onRetry={() => void load()} /> : null}
       {data !== null ? (
         <section className="console-panel issues-list-panel">
+          {data.installationReason ? <p>{reasonLabel(data.installationReason)}</p> : null}
           <div className="issues-summary">
             <div><strong>{data.items.length}</strong><span>稳定指纹</span></div>
             <div><strong>{data.sampleCount}</strong><span>合格事故样本</span></div>
@@ -65,7 +66,7 @@ export function IssuesPage() {
                 <tbody>{items.map((item) => (
                   <tr key={item.fingerprint}>
                     <td><strong>{item.eventFamily}</strong><code>{shortId(item.fingerprint, 12)}</code></td>
-                    <td>{item.eventCount}</td><td>{item.affectedInstallationCount}</td>
+                    <td>{item.eventCount}</td><td>{item.affectedInstallationCount ?? "—"}</td>
                     <td>{formatDateTime(item.firstSeenMs)}</td><td>{formatDateTime(item.lastSeenMs)}</td>
                     <td><Link to={`${appPath}/issues/${item.fingerprint}`} aria-label={`打开 ${item.eventFamily} Issue`}><ArrowRight size={16} /></Link></td>
                   </tr>

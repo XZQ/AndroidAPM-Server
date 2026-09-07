@@ -40,3 +40,6 @@ Collector V2 的 `ApmResourceContext` 在 uploader drain durable outbox 时附�
 - 同 eventId 改变 occurrence snapshot 被拒绝，合法重放仍精确 ACK 且只形成一个逻辑事实。
 
 2026-08-28 的本地跨仓 E2E 构建真实 Android `HttpApmUploader`，经 Gzip/uvicorn 分别发送并重放 V2/V3 batch；测试用 SQLite inbox 证明精确 ACK、唯一事件、occurrence release/build/variant、native frame、tenant-scoped HMAC 和明文删除。该证据不替代 PostgreSQL/TLS/SigNoz 现场验收。
+## 2026-09-07 连续性实现
+
+采用显式断点方案：QueryFact 读取 `installation_hmac_key_version`；单窗口或新旧版本比较涉及多个版本时，安装数、安装影响率与其差值为 UNAVAILABLE/null，reason 为 `INSTALLATION_HMAC_CONTINUITY_BREAK`。缺版本为 `INSTALLATION_HMAC_VERSION_MISSING`。Issue 分布/趋势的安装数同样保留 null，前端隐藏不可用安装曲线；事件计数继续返回。没有引入明文、可逆映射或跨租户 alias。重放仍使用原行版本验证。

@@ -49,6 +49,7 @@ export function IssueDetailPage() {
   }
 
   const distribution = detail[tab];
+  const installationTrend = detail.trend.map((point) => point.affectedInstallationCount);
   return (
     <div className="console-page">
       <PageHeader
@@ -60,8 +61,9 @@ export function IssueDetailPage() {
       />
 
       <section className="issue-summary-band">
+        {detail.reason ? <p>{reasonLabel(detail.reason)}</p> : null}
         <SummaryFact label="事件数" value={detail.eventCount.toLocaleString("zh-CN")} />
-        <SummaryFact label="影响安装" value={detail.affectedInstallationCount.toLocaleString("zh-CN")} />
+        <SummaryFact label="影响安装" value={detail.affectedInstallationCount?.toLocaleString("zh-CN") ?? "不可用"} />
         <SummaryFact label="首次发生" value={detail.firstSeenMs === null ? "—" : formatDateTime(detail.firstSeenMs)} />
         <SummaryFact label="最近发生" value={detail.lastSeenMs === null ? "—" : formatDateTime(detail.lastSeenMs)} />
         <SummaryFact label="Source" value="durable_inbox" />
@@ -74,9 +76,9 @@ export function IssueDetailPage() {
             timestamps={detail.trend.map((point) => point.bucketStartMs)}
             series={[
               { label: "事件", color: "#52d9ba", values: detail.trend.map((point) => point.eventCount) },
-              { label: "影响安装", color: "#ffb84d", values: detail.trend.map((point) => point.affectedInstallationCount) },
+              ...(installationTrend.every((value): value is number => value !== null) ? [{ label: "影响安装", color: "#ffb84d", values: installationTrend }] : []),
             ]}
-            summary={`该 Issue 共 ${detail.eventCount} 个事件，影响 ${detail.affectedInstallationCount} 个安装`}
+            summary={`该 Issue 共 ${detail.eventCount} 个事件，影响 ${detail.affectedInstallationCount ?? "不可计算"} 个安装`}
           />
         </section>
         <section className="console-panel distribution-panel">
@@ -138,7 +140,7 @@ function DistributionView({ distribution }: { distribution: IssueDistribution })
     <div className="distribution-list">
       {distribution.items.map((item) => (
         <div key={item.label}>
-          <span>{item.label}</span><strong>{item.eventCount} 事件</strong><small>{item.affectedInstallationCount} 安装</small>
+          <span>{item.label}</span><strong>{item.eventCount} 事件</strong><small>{item.affectedInstallationCount ?? "—"} 安装</small>
           <i><b style={{ width: `${(item.eventCount / max) * 100}%` }} /></i>
         </div>
       ))}

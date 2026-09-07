@@ -105,6 +105,43 @@ def auth(key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"}
 
 
+async def test_actual_key_rotation_is_visible_to_query_projection(
+    query_api: tuple[
+        AsyncClient, async_sessionmaker[AsyncSession], dict[str, str], InstallationHmacKeyRing
+    ],
+) -> None:
+    client, factory, credentials, old_keys = query_api
+    rotated = InstallationHmacKeyRing(
+        {**old_keys.keys, "v2": b"synthetic-rotation-key-32-bytes!!!"}, "v2"
+    )
+    async with factory() as session:
+        await insert_batch(
+            session,
+            _metadata("tenant-a"),
+            [
+                _event(
+                    "rotated-health",
+                    "core",
+                    "sdk_health",
+                    {"emitCount": 5, "dropCount": 0, "dropRate": 0},
+                    "3.0.0",
+                    "installation-zero",
+                )
+            ],
+            rotated,
+        )
+        await session.commit()
+    response = await client.get(
+        "/v1/query/release-health",
+        headers=auth(credentials["viewer-a"]),
+        params=window_params(newRelease="3.0.0", baselineRelease="1.0.0"),
+    )
+    assert response.status_code == 200
+    metric = response.json()["newRelease"]["metrics"]["activeInstallations"]
+    assert metric["value"] is None
+    assert metric["reason"] == "INSTALLATION_HMAC_CONTINUITY_BREAK"
+
+
 def window_params(**extra: object) -> dict[str, object]:
     return {"fromMs": FROM_MS, "toMs": TO_MS, **extra}
 

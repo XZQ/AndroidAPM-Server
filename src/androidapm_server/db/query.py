@@ -37,6 +37,7 @@ class QueryFact:
     sdk_drop_count: int | None
     sdk_drop_rate: float | None
     sdk_emit_count: int | None = None
+    installation_hmac_key_version: str | None = None
 
 
 async def load_window_facts(
@@ -59,6 +60,7 @@ async def load_window_facts(
             InboxEvent.release_identity_quality.label("release_identity_quality"),
             InboxEvent.installation_identity_quality.label("installation_identity_quality"),
             InboxEvent.installation_hmac.label("installation_hmac"),
+            InboxEvent.installation_hmac_key_version.label("installation_hmac_key_version"),
             InboxEvent.occurrence_timestamp_ms.label("occurrence_timestamp_ms"),
             InboxEvent.received_at.label("received_at"),
             InboxEvent.incident_fingerprint.label("incident_fingerprint"),
@@ -203,6 +205,7 @@ def _fact_from_mapping(row: RowMapping) -> QueryFact:
         release_identity_quality=cast(str, row["release_identity_quality"]),
         installation_identity_quality=cast(str, row["installation_identity_quality"]),
         installation_hmac=cast(str | None, row["installation_hmac"]),
+        installation_hmac_key_version=cast(str | None, row["installation_hmac_key_version"]),
         occurrence_timestamp_ms=cast(int, row["occurrence_timestamp_ms"]),
         received_at=cast(datetime, row["received_at"]),
         incident_fingerprint=cast(str | None, row["incident_fingerprint"]),

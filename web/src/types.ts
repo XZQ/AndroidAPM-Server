@@ -90,7 +90,7 @@ export interface FingerprintItem {
   fingerprint: string;
   eventFamily: string;
   eventCount: number;
-  affectedInstallationCount: number;
+  affectedInstallationCount: number | null;
   firstSeenMs: number;
   lastSeenMs: number;
 }
@@ -103,13 +103,14 @@ export interface Fingerprints {
   state: QueryState;
   sampleCount: number;
   fingerprintCoverage: number | null;
+  installationReason?: string | null;
   items: FingerprintItem[];
 }
 
 export interface IssueDistributionItem {
   label: string;
   eventCount: number;
-  affectedInstallationCount: number;
+  affectedInstallationCount: number | null;
 }
 
 export interface IssueDistribution {
@@ -123,7 +124,7 @@ export interface IssueTrendPoint {
   bucketStartMs: number;
   bucketEndMs: number;
   eventCount: number;
-  affectedInstallationCount: number;
+  affectedInstallationCount: number | null;
 }
 
 export interface IssueDetail {
@@ -135,7 +136,7 @@ export interface IssueDetail {
   reason: string | null;
   eventFamily: string | null;
   eventCount: number;
-  affectedInstallationCount: number;
+  affectedInstallationCount: number | null;
   firstSeenMs: number | null;
   lastSeenMs: number | null;
   trend: IssueTrendPoint[];
