@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import time
 import uuid
 
 import structlog
@@ -13,7 +14,8 @@ from androidapm_server.db.models import InboxEvent
 from androidapm_server.db.session import get_session_factory
 from androidapm_server.db.worker import claim_batch, mark_delivered, mark_failed
 from androidapm_server.logging import configure_logging
-from androidapm_server.metrics import EXPORT_EVENTS, EXPORT_REQUEST_SECONDS
+from androidapm_server.metrics import EXPORT_EVENTS, EXPORT_REQUEST_SECONDS, WORKER_CYCLE_TIMESTAMP
+from androidapm_server.observability import worker_observability
 from androidapm_server.otlp import build_logs_request
 from androidapm_server.otlp.client import ExportResult, OtlpLogsClient
 
@@ -62,31 +64,35 @@ async def export_once(client: OtlpLogsClient, owner: str) -> int:
         # Unexpected transport failures must consume the same bounded retry budget. Never
         # persist an exception message that could contain payloads or transport credentials.
         result = ExportResult(False, True, "export_internal_error", "OTLP transport failed")
+    outcomes: dict[str, int] = {}
     async with factory() as session:
         if result.success:
             completed = await mark_delivered(session, owner, [event.id for event in exportable])
-            EXPORT_EVENTS.labels("delivered").inc(completed)
+            outcomes["delivered"] = completed
         else:
-            completed = await mark_failed(
-                session,
-                owner,
-                exportable,
-                result.retryable,
-                settings.worker_max_attempts,
-                result.error_code or "unknown_export_error",
-                result.error_message or "OTLP export failed",
-                result.retry_after_seconds,
-            )
-            # An exhausted retryable failure is a dead letter, not another retry.
+            completed = 0
             for event in exportable:
+                count = await mark_failed(
+                    session,
+                    owner,
+                    [event],
+                    result.retryable,
+                    settings.worker_max_attempts,
+                    result.error_code or "unknown_export_error",
+                    result.error_message or "OTLP export failed",
+                    result.retry_after_seconds,
+                )
                 label = (
                     "retry"
                     if result.retryable and event.attempt_count < settings.worker_max_attempts
                     else "dead_letter"
                 )
-                if completed == len(exportable):
-                    EXPORT_EVENTS.labels(label).inc()
+                outcomes[label] = outcomes.get(label, 0) + count
+                completed += count
         await session.commit()
+    # Publish outcomes only after commit, including partial batches where leases were lost.
+    for label, count in outcomes.items():
+        EXPORT_EVENTS.labels(label).inc(count)
     return changed + completed
 
 
@@ -121,16 +127,18 @@ async def worker_loop() -> None:
     )
     logger.info("worker_started", owner=owner)
     try:
-        while True:
-            try:
-                changed = await export_once(client, owner)
-                if changed == 0:
+        async with worker_observability("export", settings):
+            while True:
+                try:
+                    changed = await export_once(client, owner)
+                    WORKER_CYCLE_TIMESTAMP.labels("export").set(time.time())
+                    if changed == 0:
+                        await asyncio.sleep(settings.worker_poll_seconds)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("worker_cycle_failed", owner=owner)
                     await asyncio.sleep(settings.worker_poll_seconds)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("worker_cycle_failed", owner=owner)
-                await asyncio.sleep(settings.worker_poll_seconds)
     finally:
         await client.close()
         logger.info("worker_stopped", owner=owner)

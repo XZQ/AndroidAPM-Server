@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import time
 import uuid
 
 import structlog
@@ -19,7 +20,12 @@ from androidapm_server.db.symbolization import (
     resolve_artifact,
 )
 from androidapm_server.logging import configure_logging
-from androidapm_server.metrics import SYMBOLIZATION_JOBS, SYMBOLIZATION_SECONDS
+from androidapm_server.metrics import (
+    SYMBOLIZATION_JOBS,
+    SYMBOLIZATION_SECONDS,
+    WORKER_CYCLE_TIMESTAMP,
+)
+from androidapm_server.observability import worker_observability
 from androidapm_server.symbolization import SymbolizationFailure, symbolize_job
 
 logger = structlog.get_logger(__name__)
@@ -71,8 +77,7 @@ async def symbolize_once(owner: str) -> int:
         except SymbolizationFailure as error:
             async with factory() as session:
                 should_retry = (
-                    error.retryable
-                    and job.attempt_count < settings.symbolizer_max_attempts
+                    error.retryable and job.attempt_count < settings.symbolizer_max_attempts
                 )
                 if await mark_symbolization_failed(
                     session,
@@ -128,16 +133,18 @@ async def symbolizer_loop() -> None:
     owner = f"{socket.gethostname()}-{uuid.uuid4().hex}"
     logger.info("symbolizer_started", owner=owner, enabled=settings.symbolization_enabled)
     try:
-        while True:
-            try:
-                changed = await symbolize_once(owner)
-                if changed == 0:
+        async with worker_observability("symbolizer", settings):
+            while True:
+                try:
+                    changed = await symbolize_once(owner)
+                    WORKER_CYCLE_TIMESTAMP.labels("symbolizer").set(time.time())
+                    if changed == 0:
+                        await asyncio.sleep(settings.symbolizer_poll_seconds)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("symbolizer_cycle_failed", owner=owner)
                     await asyncio.sleep(settings.symbolizer_poll_seconds)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("symbolizer_cycle_failed", owner=owner)
-                await asyncio.sleep(settings.symbolizer_poll_seconds)
     finally:
         logger.info("symbolizer_stopped", owner=owner)
 

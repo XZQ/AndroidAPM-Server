@@ -27,6 +27,21 @@ INBOX_OLDEST_SECONDS = Gauge(
     "androidapm_inbox_oldest_seconds",
     "Age of the oldest exportable inbox event.",
 )
+INBOX_SNAPSHOT_AVAILABLE = Gauge(
+    "androidapm_inbox_snapshot_available", "Whether the latest DB snapshot succeeded."
+)
+INBOX_SNAPSHOT_TIMESTAMP = Gauge(
+    "androidapm_inbox_snapshot_timestamp_seconds", "Last successful database observation time."
+)
+INBOX_ROWS = Gauge(
+    "androidapm_inbox_rows", "Database inbox rows by bounded durable status.", ("status",)
+)
+PROCESS_ROLE = Gauge("androidapm_process_role", "Role served by this scrape target.", ("role",))
+WORKER_CYCLE_TIMESTAMP = Gauge(
+    "androidapm_worker_cycle_timestamp_seconds", "Last completed worker cycle.", ("role",)
+)
+INBOX_PENDING.set(float("nan"))
+INBOX_OLDEST_SECONDS.set(float("nan"))
 EXPORT_EVENTS = Counter(
     "androidapm_export_events_total",
     "Inbox export outcomes.",

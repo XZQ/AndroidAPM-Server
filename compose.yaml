@@ -13,6 +13,9 @@ x-app-environment: &app-environment
   APM_RETRACE_TOOL_VERSION: ${APM_RETRACE_TOOL_VERSION:-unconfigured}
   APM_LLVM_SYMBOLIZER_COMMAND_JSON: '${APM_LLVM_SYMBOLIZER_COMMAND_JSON:-["llvm-symbolizer"]}'
   APM_LLVM_SYMBOLIZER_TOOL_VERSION: ${APM_LLVM_SYMBOLIZER_TOOL_VERSION:-unconfigured}
+  APM_METRICS_BIND: 0.0.0.0
+  APM_WORKER_METRICS_PORT: 9101
+  APM_SYMBOLIZER_METRICS_PORT: 9102
   APM_QUERY_MAX_WINDOW_DAYS: ${APM_QUERY_MAX_WINDOW_DAYS:-31}
   APM_QUERY_MAX_ROWS: ${APM_QUERY_MAX_ROWS:-10000}
   APM_QUERY_MAX_LIMIT: ${APM_QUERY_MAX_LIMIT:-100}
@@ -70,6 +73,7 @@ services:
   worker:
     build: .
     command: ["androidapm-worker"]
+    expose: ["9101"]
     environment: *app-environment
     depends_on:
       migrate:
@@ -86,6 +90,7 @@ services:
   symbolizer:
     build: .
     command: ["androidapm-symbolizer"]
+    expose: ["9102"]
     environment: *app-environment
     depends_on:
       migrate:

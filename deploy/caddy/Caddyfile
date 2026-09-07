@@ -1,4 +1,6 @@
 {$APM_DOMAIN} {
+    @private_metrics path /metrics /metrics/*
+    respond @private_metrics 404
     encode zstd gzip
 
     header {

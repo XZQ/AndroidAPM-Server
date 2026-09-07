@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from androidapm_server import __version__
 from androidapm_server.db.session import get_session
+from androidapm_server.metrics import PROCESS_ROLE
+from androidapm_server.observability import refresh_inbox_metrics
 
 router = APIRouter(tags=["operations"])
 
@@ -30,6 +32,8 @@ async def ready(session: Annotated[AsyncSession, Depends(get_session)]) -> dict[
 
 
 @router.get("/metrics", include_in_schema=False)
-async def metrics() -> Response:
+async def metrics(session: Annotated[AsyncSession, Depends(get_session)]) -> Response:
     """Expose process metrics in Prometheus text format."""
+    PROCESS_ROLE.labels("gateway").set(1)
+    await refresh_inbox_metrics(session)
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

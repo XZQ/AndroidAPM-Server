@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     worker_lease_seconds: int = Field(default=60, ge=10, le=3_600)
     worker_poll_seconds: float = Field(default=1.0, ge=0.05, le=60)
     worker_max_attempts: int = Field(default=10, ge=1, le=100)
+    metrics_bind: str = "127.0.0.1"
+    worker_metrics_port: int = Field(default=9101, ge=0, le=65535)
+    symbolizer_metrics_port: int = Field(default=9102, ge=0, le=65535)
+    metrics_refresh_seconds: float = Field(default=15, ge=1, le=300)
     delivered_retention_days: int = Field(default=7, ge=1, le=365)
     dead_letter_retention_days: int = Field(default=30, ge=1, le=3650)
     artifact_storage_path: Path = Path("artifacts")
