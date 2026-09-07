@@ -6,6 +6,7 @@ import { getEventMetadata, getRawEvent } from "../../api";
 import { formatDateTime, shortId } from "../../format";
 import type { EventMetadata, RawEvent } from "../../types";
 import type { ConsoleContextValue } from "../context";
+import { useRequestGuard } from "../useRequestGuard";
 import { EmptyPanel, ErrorPanel, LoadingPanel, PageHeader, SectionHeading } from "../Primitives";
 
 export function EventDetailPage() {
@@ -20,32 +21,41 @@ export function EventDetailPage() {
   const [rawError, setRawError] = useState<string | null>(null);
   const [purpose, setPurpose] = useState("incident_diagnosis");
   const [reason, setReason] = useState("");
+  const begin = useRequestGuard();
+  const beginRaw = useRequestGuard();
 
   const load = useCallback(async () => {
     if (session.role !== "investigator") return;
+    const current = begin();
+    beginRaw();
+    setMetadata(null); setRaw(null); setRawError(null); setRawLoading(false);
     setLoading(true);
     setError(null);
     try {
-      setMetadata(await getEventMetadata(eventId));
+      const result = await getEventMetadata(eventId);
+      if (current()) setMetadata(result);
     } catch (caught) {
-      setError(handleFailure(caught, "事件元数据查询失败"));
+      if (current()) setError(handleFailure(caught, "事件元数据查询失败"));
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
-  }, [eventId, handleFailure, session.role]);
+  }, [begin, beginRaw, eventId, handleFailure, session.role]);
 
   useEffect(() => { void load(); }, [load]);
 
   async function requestRaw(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const current = beginRaw();
+    setRaw(null);
     setRawLoading(true);
     setRawError(null);
     try {
-      setRaw(await getRawEvent(eventId, purpose, reason.trim()));
+      const result = await getRawEvent(eventId, purpose, reason.trim());
+      if (current()) setRaw(result);
     } catch (caught) {
-      setRawError(handleFailure(caught, "原始证据读取失败"));
+      if (current()) setRawError(handleFailure(caught, "原始证据读取失败"));
     } finally {
-      setRawLoading(false);
+      if (current()) setRawLoading(false);
     }
   }
 

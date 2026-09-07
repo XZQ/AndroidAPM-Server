@@ -7,17 +7,21 @@ import { StateBadge } from "../../components/StateBadge";
 import { formatDateTime, formatPercent, reasonLabel, shortId } from "../../format";
 import type { DataQuality, MetricResult } from "../../types";
 import type { ConsoleContextValue } from "../context";
+import { useRequestGuard } from "../useRequestGuard";
 import { ErrorPanel, LoadingPanel, PageHeader, SectionHeading } from "../Primitives";
 
 export function QualityPage() {
   const { filters, handleFailure } = useOutletContext<ConsoleContextValue>();
   const [quality, setQuality] = useState<DataQuality | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const begin = useRequestGuard();
   const load = useCallback(async () => {
+    const current = begin();
+    setQuality(null);
     setError(null);
-    try { setQuality(await getDataQuality(filters)); }
-    catch (caught) { setError(handleFailure(caught, "数据质量查询失败")); }
-  }, [filters, handleFailure]);
+    try { const result = await getDataQuality(filters); if (current()) setQuality(result); }
+    catch (caught) { if (current()) setError(handleFailure(caught, "数据质量查询失败")); }
+  }, [begin, filters, handleFailure]);
   useEffect(() => { void load(); }, [load]);
 
   if (quality === null && error === null) return <LoadingPanel label="正在核对遥测可解释性…" />;

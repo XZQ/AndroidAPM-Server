@@ -7,6 +7,7 @@ import { StateBadge } from "../../components/StateBadge";
 import { formatDateTime, formatPercent, shortId } from "../../format";
 import type { Fingerprints } from "../../types";
 import type { ConsoleContextValue } from "../context";
+import { useRequestGuard } from "../useRequestGuard";
 import { EmptyPanel, ErrorPanel, LoadingPanel, PageHeader } from "../Primitives";
 
 export function IssuesPage() {
@@ -16,11 +17,14 @@ export function IssuesPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [family, setFamily] = useState("ALL");
+  const begin = useRequestGuard();
   const load = useCallback(async () => {
+    const current = begin();
+    setData(null);
     setError(null);
-    try { setData(await getFingerprints(filters)); }
-    catch (caught) { setError(handleFailure(caught, "Issues 聚合查询失败")); }
-  }, [filters, handleFailure]);
+    try { const result = await getFingerprints(filters); if (current()) setData(result); }
+    catch (caught) { if (current()) setError(handleFailure(caught, "Issues 聚合查询失败")); }
+  }, [begin, filters, handleFailure]);
   useEffect(() => { void load(); }, [load]);
 
   const items = useMemo(() => {

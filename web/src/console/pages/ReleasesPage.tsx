@@ -7,6 +7,7 @@ import { StateBadge } from "../../components/StateBadge";
 import { formatDateTime } from "../../format";
 import type { ReleaseDecision, ReleaseDecisionInput, ReleaseDecisionValue, ReleaseHealth } from "../../types";
 import type { ConsoleContextValue } from "../context";
+import { useRequestGuard } from "../useRequestGuard";
 import { EmptyPanel, ErrorPanel, LoadingPanel, PageHeader } from "../Primitives";
 
 export function ReleasesPage() {
@@ -17,20 +18,26 @@ export function ReleasesPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [decisionError, setDecisionError] = useState<string | null>(null);
+  const begin = useRequestGuard();
+  const beginSubmit = useRequestGuard();
 
   const load = useCallback(async () => {
+    const current = begin();
+    setHealth(null); setDecisions([]); setDecisionError(null);
     setLoading(true); setError(null);
     try {
       const result = await getReleaseHealth(filters);
-      setHealth(result);
-      if (session.role === "investigator") setDecisions((await getReleaseDecisions(filters.newRelease)).items);
-    } catch (caught) { setError(handleFailure(caught, "发布证据查询失败")); }
-    finally { setLoading(false); }
-  }, [filters, handleFailure, session.role]);
+      const history = session.role === "investigator" ? (await getReleaseDecisions(filters.newRelease)).items : [];
+      if (!current()) return;
+      setHealth(result); setDecisions(history);
+    } catch (caught) { if (current()) setError(handleFailure(caught, "发布证据查询失败")); }
+    finally { if (current()) setLoading(false); }
+  }, [begin, filters, handleFailure, session.role]);
   useEffect(() => { void load(); }, [load]);
 
   async function submit(decision: ReleaseDecisionValue, reason: string) {
-    if (health === null) return;
+    if (health === null || loading || submitting || error !== null) return false;
+    const current = beginSubmit();
     setSubmitting(true); setDecisionError(null);
     const release = health.newRelease;
     const input: ReleaseDecisionInput = {
@@ -53,9 +60,14 @@ export function ReleasesPage() {
     };
     try {
       const created = await createReleaseDecision(input);
+      if (!current()) return false;
       setDecisions((current) => [created, ...current]);
-    } catch (caught) { setDecisionError(handleFailure(caught, "发布决策记录失败")); }
-    finally { setSubmitting(false); }
+      return true;
+    } catch (caught) {
+      if (current()) setDecisionError(handleFailure(caught, "发布决策记录失败"));
+      return false;
+    }
+    finally { if (current()) setSubmitting(false); }
   }
 
   if (loading && health === null) return <LoadingPanel label="正在读取版本证据…" />;

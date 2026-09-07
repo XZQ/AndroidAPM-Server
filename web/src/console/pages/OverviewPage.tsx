@@ -7,6 +7,7 @@ import { StateBadge } from "../../components/StateBadge";
 import { formatDateTime, formatPercent, shortId } from "../../format";
 import type { DataQuality, Fingerprints, ReleaseHealth } from "../../types";
 import type { ConsoleContextValue } from "../context";
+import { useRequestGuard } from "../useRequestGuard";
 import { ErrorPanel, LoadingPanel, MetricTile, PageHeader, SectionHeading } from "../Primitives";
 import { TrendChart } from "../TrendChart";
 
@@ -20,8 +21,11 @@ export function OverviewPage() {
   const [error, setError] = useState<string | null>(null);
   const [newRelease, setNewRelease] = useState(filters.newRelease);
   const [baselineRelease, setBaselineRelease] = useState(filters.baselineRelease);
+  const begin = useRequestGuard();
 
   const load = useCallback(async () => {
+    const current = begin();
+    setHealth(null); setQuality(null); setFingerprints(null);
     setLoading(true);
     setError(null);
     const results = await Promise.allSettled([
@@ -30,12 +34,19 @@ export function OverviewPage() {
       getFingerprints(filters),
     ]);
     const [healthResult, qualityResult, fingerprintResult] = results;
+    if (!current()) return;
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") {
+      setError(handleFailure(failure.reason, "总览证据查询失败"));
+      setLoading(false);
+      return;
+    }
     if (healthResult.status === "fulfilled") setHealth(healthResult.value);
     else setError(handleFailure(healthResult.reason, "发布健康查询失败"));
     if (qualityResult.status === "fulfilled") setQuality(qualityResult.value);
     if (fingerprintResult.status === "fulfilled") setFingerprints(fingerprintResult.value);
     setLoading(false);
-  }, [filters, handleFailure]);
+  }, [begin, filters, handleFailure]);
 
   useEffect(() => { void load(); }, [load]);
 

@@ -6,6 +6,7 @@ import { getEvents } from "../../api";
 import { formatDateTime, shortId } from "../../format";
 import type { EventPage } from "../../types";
 import type { ConsoleContextValue } from "../context";
+import { useRequestGuard } from "../useRequestGuard";
 import { EmptyPanel, ErrorPanel, LoadingPanel, PageHeader, SectionHeading } from "../Primitives";
 
 export function ExplorePage() {
@@ -17,16 +18,20 @@ export function ExplorePage() {
   const [active, setActive] = useState({ module: "", name: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const begin = useRequestGuard();
 
   const load = useCallback(async (cursor?: string) => {
     if (session.role !== "investigator") return;
+    const current = begin();
+    if (cursor === undefined) setPage(null);
     setLoading(true); setError(null);
     try {
       const next = await getEvents(filters, undefined, cursor, active.module || undefined, active.name || undefined);
+      if (!current()) return;
       setPage((current) => cursor !== undefined && current !== null ? { ...next, items: [...current.items, ...next.items] } : next);
-    } catch (caught) { setError(handleFailure(caught, "事件探索查询失败")); }
-    finally { setLoading(false); }
-  }, [active.module, active.name, filters, handleFailure, session.role]);
+    } catch (caught) { if (current()) setError(handleFailure(caught, "事件探索查询失败")); }
+    finally { if (current()) setLoading(false); }
+  }, [begin, active.module, active.name, filters, handleFailure, session.role]);
   useEffect(() => { void load(); }, [load]);
 
   function submit(event: FormEvent<HTMLFormElement>) {

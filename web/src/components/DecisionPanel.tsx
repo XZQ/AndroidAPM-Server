@@ -14,7 +14,7 @@ interface DecisionPanelProps {
   decisions: ReleaseDecision[];
   submitting: boolean;
   error: string | null;
-  onSubmit: (decision: ReleaseDecisionValue, reason: string) => Promise<void>;
+  onSubmit: (decision: ReleaseDecisionValue, reason: string) => Promise<boolean>;
 }
 
 const DECISION_LABELS: Record<ReleaseDecisionValue, string> = {
@@ -37,7 +37,7 @@ export function DecisionPanel({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await onSubmit(decision, reason);
+    if (!await onSubmit(decision, reason)) return;
     setReason("");
     setConfirmed(false);
   }

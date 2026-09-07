@@ -7,6 +7,7 @@ import { StateBadge } from "../../components/StateBadge";
 import { formatDateTime, reasonLabel, shortId } from "../../format";
 import type { EventPage, IssueDetail, IssueDistribution } from "../../types";
 import type { ConsoleContextValue } from "../context";
+import { useRequestGuard } from "../useRequestGuard";
 import { EmptyPanel, ErrorPanel, LoadingPanel, PageHeader, SectionHeading } from "../Primitives";
 import { TrendChart } from "../TrendChart";
 
@@ -20,19 +21,23 @@ export function IssueDetailPage() {
   const [events, setEvents] = useState<EventPage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<DistributionKey>("releases");
+  const begin = useRequestGuard();
   const load = useCallback(async () => {
+    const current = begin();
+    setDetail(null); setEvents(null);
     setError(null);
     try {
       const [issue, page] = await Promise.all([
         getIssueDetail(fingerprint, filters),
         session.role === "investigator" ? getEvents(filters, fingerprint) : Promise.resolve(null),
       ]);
+      if (!current()) return;
       setDetail(issue);
       setEvents(page);
     } catch (caught) {
-      setError(handleFailure(caught, "Issue 详情查询失败"));
+      if (current()) setError(handleFailure(caught, "Issue 详情查询失败"));
     }
-  }, [filters, fingerprint, handleFailure, session.role]);
+  }, [begin, filters, fingerprint, handleFailure, session.role]);
   useEffect(() => { void load(); }, [load]);
 
   const appPath = `/apps/${encodeURIComponent(session.scope.appId)}`;

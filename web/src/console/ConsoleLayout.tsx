@@ -17,7 +17,7 @@ import {
   Sun,
   X,
 } from "lucide-react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { formatDateTime } from "../format";
 import type { ConsoleContextValue } from "./context";
@@ -25,6 +25,9 @@ import type { ConsoleContextValue } from "./context";
 export function ConsoleLayout({ value }: { value: ConsoleContextValue }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const { session, filters, setFilters, dark, setDark } = value;
+  const location = useLocation();
+  // Every rendered evidence tree belongs to one immutable route, scope and query snapshot.
+  const evidenceKey = JSON.stringify([location.pathname, location.search, session, filters]);
   const appPath = `/apps/${encodeURIComponent(session.scope.appId)}`;
   const nav = [
     { to: `${appPath}/overview`, label: "总览", icon: BarChart3 },
@@ -107,7 +110,7 @@ export function ConsoleLayout({ value }: { value: ConsoleContextValue }) {
           </div>
         </header>
         <main className="console-content">
-          <Outlet context={value} />
+          <Outlet key={evidenceKey} context={value} />
         </main>
         <footer className="console-footer">
           <span><ShieldCheck size={13} /> fixed tenant/app/environment</span>

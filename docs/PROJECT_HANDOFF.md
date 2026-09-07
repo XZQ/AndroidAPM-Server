@@ -10,6 +10,8 @@
 
 2. Installation 派生证据：统一最小化 raw/registered/native/symbol input；覆盖 V2/V3、嵌套字符串、跨 key replay 和整批拒绝回归。依赖锁、Ruff、mypy、111 个后端测试及文档门禁通过。新数据修复不代表已清理外部历史存储。
 
+3. 页面证据绑定：覆盖全部查询页面、raw 和人工决策；前端 lint/typecheck/test/build 通过（12 tests），新增失败刷新、乱序响应、跨事件 raw 三个回归。
+
 ## 2026-09-04 多路由 APM 控制台与 Issue 聚合（历史）
 
 本轮把原有发布健康长页面升级为同源多路由诊断控制台：总览、Issues、Issue 详情、investigator 事件探索/详情、版本发布和数据质量均有独立可恢复 URL；性能、告警和设置以 `UNAVAILABLE`/`UNCONFIGURED` 页面公开真实建设边界。viewer 导航不显示事件枚举入口，直接访问事件页也只返回权限说明；L2 raw 不自动读取，仍要求 purpose/reason 并等待服务端审计提交。

@@ -1,5 +1,7 @@
 # AndroidAPM-Server
 
+Console evidence is bound to its route, session scope and filter snapshot. Changed queries discard prior evidence, late responses are ignored, and failed refreshes cannot retain an actionable release decision panel. Failed audited submissions preserve the entered reason.
+
 Installation privacy is applied before normalization and symbol-job preparation: registered attributes, nested raw values/keys, and native identities use minimized evidence. An installation value embedded in a required event/routing/release identifier rejects the whole batch with `422 privacy_identity_conflict`; identity is never silently rewritten.
 
 AndroidAPM-Server is the backend for the [AndroidAPM](https://github.com/XZQ/AndroidAPM) SDK. It accepts legacy Line Protocol and length-prefixed Protobuf plus explicit Protobuf V2/V3 envelopes, durably deduplicates at-least-once deliveries, and exports allow-listed OpenTelemetry Logs to SigNoz. V3 binds release, build, installation, and optional native-frame identity to the event occurrence rather than its later upload batch.
