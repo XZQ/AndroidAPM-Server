@@ -70,10 +70,10 @@ async def enqueue_symbolization_jobs(
         job_type = _job_type(event)
         if job_type is None:
             continue
-        stack = _stack_value(event, job_type)
+        stack = _stack_value(inbox.payload_json, job_type)
         if not enabled:
             status = SYMBOL_STATUS_DISABLED
-        elif _has_symbol_identity(event, job_type, stack):
+        elif _has_symbol_identity(inbox, job_type, stack):
             status = SYMBOL_STATUS_PENDING
         else:
             status = SYMBOL_STATUS_METADATA_MISSING
@@ -389,38 +389,37 @@ def _job_type(event: ApmEvent) -> str | None:
     return None
 
 
-def _stack_value(event: ApmEvent, job_type: str) -> str:
+def _stack_value(payload: dict[str, Any], job_type: str) -> str:
     """Read current and compatibility stack field spellings without coercing objects."""
     keys = ("stackTrace", "stack_trace") if job_type == SYMBOL_JOB_JAVA else ("backtrace",)
     for key in keys:
-        value = event.fields.get(key)
+        value = _payload_fields(payload).get(key)
         if isinstance(value, str):
             return value
     return ""
 
 
 def _has_symbol_identity(
-    event: ApmEvent,
+    inbox: InboxEvent,
     job_type: str,
     stack: str,
 ) -> bool:
     """Require the complete exact-match identity before blocking raw crash export."""
-    occurrence = event.occurrence
     if (
         not stack
-        or occurrence is None
-        or not occurrence.version_code
-        or not occurrence.app_build
-        or not occurrence.variant
+        or inbox.release_identity_quality != "OCCURRENCE_BOUND"
+        or not inbox.version_code
+        or not inbox.app_build
+        or not inbox.variant
     ):
         return False
     if job_type == SYMBOL_JOB_JAVA:
         return True
-    if not occurrence.native_frames:
+    if not inbox.native_identity_json:
         return False
-    first_frame = occurrence.native_frames[0]
-    abi = first_frame.abi
-    build_id = first_frame.module_build_id.lower()
+    first_frame = inbox.native_identity_json[0]
+    abi = str(first_frame.get("abi", ""))
+    build_id = str(first_frame.get("module_build_id", "")).lower()
     return abi in SUPPORTED_ABIS and BUILD_ID_PATTERN.fullmatch(build_id) is not None
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 
 import pytest
@@ -10,9 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from androidapm_server.db.base import Base
 from androidapm_server.db.inbox import insert_batch
 from androidapm_server.db.models import InboxEvent
-from androidapm_server.domain import ApmEvent, IngestMetadata, OccurrenceContext
+from androidapm_server.domain import (
+    ApmEvent,
+    IngestMetadata,
+    NativeFrameIdentity,
+    OccurrenceContext,
+)
 from androidapm_server.errors import ApiError
 from androidapm_server.identity import InstallationHmacKeyRing
+from androidapm_server.otlp import build_logs_request
 
 KEYS_V1 = InstallationHmacKeyRing.parse(
     '{"v1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}',
@@ -177,3 +184,69 @@ async def test_replay_uses_stored_hmac_key_version_after_active_key_rotation(
     assert replay.duplicates == 1
     assert row is not None
     assert row.installation_hmac_key_version == "v1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("occurrence_bound", [True, False])
+async def test_every_durable_projection_uses_minimized_evidence(
+    session: AsyncSession,
+    occurrence_bound: bool,
+) -> None:
+    plaintext = "synthetic-installation-private"
+    item = occurrence_event("private-projections", plaintext).model_copy(
+        update={
+            "module": "crash",
+            "name": "java_crash",
+            "scene": f"scene/{plaintext}",
+            "fields": {
+                "threadName": plaintext,
+                "exceptionMessage": f"user={plaintext}",
+                "stackTrace": "at app.Safe.run(Safe.java:20)",
+                "nested": [plaintext, {"value": f"prefix/{plaintext}"}, "safe"],
+                f"key/{plaintext}": "secret-key",
+            },
+        }
+    )
+    assert item.occurrence is not None
+    item = item.model_copy(
+        update={
+            "occurrence": item.occurrence.model_copy(
+                update={
+                    "native_frames": (
+                        NativeFrameIdentity(
+                            abi="arm64-v8a",
+                            module_build_id="abcd1234",
+                            module_name=plaintext,
+                            module_relative_pc=12,
+                        ),
+                    )
+                }
+            )
+        }
+    )
+    meta = metadata()
+    if not occurrence_bound:
+        meta = meta.model_copy(update={"installation_id": plaintext})
+        item = item.model_copy(update={"occurrence": None})
+    await insert_batch(session, meta, [item], KEYS_V1)
+    await session.commit()
+    row = await session.scalar(select(InboxEvent))
+    assert row is not None
+    for document in (row.payload_json, row.normalized_json, row.native_identity_json):
+        assert plaintext not in json.dumps(document)
+    assert row.normalized_json["field_states"]["threadName"] == "MISSING"
+    assert row.payload_json["fields"]["nested"] == [{}, "safe"]
+    assert row.native_identity_json == []
+    assert plaintext.encode() not in build_logs_request([row]).SerializeToString()
+    assert plaintext in str(item.fields)  # No mutation of the caller's event.
+    assert (await insert_batch(session, meta, [item], KEYS_V2)).duplicates == 1
+
+
+@pytest.mark.asyncio
+async def test_installation_in_required_identity_rejects_whole_batch(session: AsyncSession) -> None:
+    item = occurrence_event("conflicting-identity", "synthetic-installation").model_copy(
+        update={"thread_name": "thread/synthetic-installation"}
+    )
+    with pytest.raises(ApiError, match="Required identity"):
+        await insert_batch(session, metadata(), [event("healthy"), item], KEYS_V1)
+    assert await session.scalar(select(func.count()).select_from(InboxEvent)) == 0

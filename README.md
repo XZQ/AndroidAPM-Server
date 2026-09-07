@@ -1,5 +1,7 @@
 # AndroidAPM-Server
 
+Installation privacy is applied before normalization and symbol-job preparation: registered attributes, nested raw values/keys, and native identities use minimized evidence. An installation value embedded in a required event/routing/release identifier rejects the whole batch with `422 privacy_identity_conflict`; identity is never silently rewritten.
+
 AndroidAPM-Server is the backend for the [AndroidAPM](https://github.com/XZQ/AndroidAPM) SDK. It accepts legacy Line Protocol and length-prefixed Protobuf plus explicit Protobuf V2/V3 envelopes, durably deduplicates at-least-once deliveries, and exports allow-listed OpenTelemetry Logs to SigNoz. V3 binds release, build, installation, and optional native-frame identity to the event occurrence rather than its later upload batch.
 
 The project deliberately does not fork SigNoz. Android-specific ingestion, tenancy, symbolization, remote configuration, release-artifact handling, and the fixed-scope release-health Web console live here; general telemetry storage, exploratory querying, dashboards, and alert evaluation are provided by SigNoz and its ClickHouse data plane.

@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -21,7 +22,7 @@ from androidapm_server.constants import (
     TIMESTAMP_QUALITY_EVENT_DECLARED,
 )
 from androidapm_server.db.models import InboxEvent
-from androidapm_server.domain import ApmEvent, IdentityQuality, IngestMetadata
+from androidapm_server.domain import ApmEvent, IdentityQuality, IngestMetadata, NativeFrameIdentity
 from androidapm_server.errors import ApiError
 from androidapm_server.identity import InstallationHmacKeyRing
 from androidapm_server.normalization import NormalizationResult, normalize_event
@@ -264,9 +265,53 @@ def _prepare_event(
 
     payload = event.model_dump(mode="json")
     _remove_known_installation_plaintext(payload, installation_plaintext)
-    normalization = normalize_event(event)
+    # Identity cannot be silently rewritten: reject a batch if its required routing/release
+    # identity embeds the installation secret. Optional evidence is minimized below instead.
+    if installation_plaintext and any(
+        installation_plaintext in value
+        for value in (
+            event.event_id,
+            event.module,
+            event.name,
+            event.process_name,
+            event.thread_name,
+            metadata.tenant_id,
+            metadata.app_id,
+            metadata.environment,
+            metadata.sdk_version,
+            metadata.request_id,
+            app_version,
+            app_build,
+            version_code,
+            variant,
+        )
+        if isinstance(value, str)
+    ):
+        raise ApiError(
+            422, "privacy_identity_conflict", "Required identity contains installation data"
+        )
+    safe_occurrence = None
+    if occurrence is not None:
+        # A partially scrubbed native frame is no longer a usable exact identity.
+        frames = []
+        occurrence_payload = payload.get("occurrence", {})
+        for frame in occurrence_payload.get("native_frames", []):
+            try:
+                frames.append(NativeFrameIdentity.model_validate(frame))
+            except ValidationError:
+                continue
+        occurrence_payload["native_frames"] = [frame.model_dump(mode="json") for frame in frames]
+        safe_occurrence = occurrence.model_copy(update={"native_frames": tuple(frames)})
+    safe_event = event.model_copy(
+        update={
+            key: payload.get(key, {} if key != "scene" else None)
+            for key in ("fields", "field_types", "global_context", "extras", "unknown", "scene")
+        }
+        | {"occurrence": safe_occurrence}
+    )
+    normalization = normalize_event(safe_event)
     return PreparedEvent(
-        event=event,
+        event=safe_event,
         payload=payload,
         payload_hash="",
         app_version=app_version,
@@ -284,16 +329,17 @@ def _prepare_event(
 
 def _remove_known_installation_plaintext(value: object, plaintext: str | None) -> None:
     """Remove the known identifier from every durable map/list location before serialization."""
-    if plaintext is None:
+    if not plaintext:
         return
     if isinstance(value, dict):
         for key in list(value):
             item = value[key]
-            if item == plaintext:
+            if plaintext in key or (isinstance(item, str) and plaintext in item):
                 del value[key]
             else:
                 _remove_known_installation_plaintext(item, plaintext)
     elif isinstance(value, list):
+        value[:] = [item for item in value if not (isinstance(item, str) and plaintext in item)]
         for item in value:
             _remove_known_installation_plaintext(item, plaintext)
 
