@@ -537,6 +537,65 @@ async def test_scope_parameters_limits_windows_and_row_budget_are_enforced(
     )
     assert budget.status_code == 422
     assert budget.json()["code"] == "query_budget_exceeded"
+    filtered = await client.get(
+        "/v1/query/data-quality",
+        headers=auth(credentials["viewer-a"]),
+        params=window_params(releaseVersion="2.0.0"),
+    )
+    assert filtered.status_code == 200
+    assert filtered.json()["sampleCount"] == 7
+    page = await client.get(
+        "/v1/query/events",
+        headers=auth(credentials["investigator-a"]),
+        params=window_params(module="crash", name="java_crash", releaseVersion="2.0.0"),
+    )
+    assert page.status_code == 200
+    assert len(page.json()["items"]) == 3
+
+
+async def test_sql_reduction_counts_more_events_than_the_projection_budget(
+    query_api: tuple[
+        AsyncClient, async_sessionmaker[AsyncSession], dict[str, str], InstallationHmacKeyRing
+    ],
+) -> None:
+    client, factory, credentials, key_ring = query_api
+    async with factory() as session:
+        await insert_batch(
+            session,
+            _metadata("tenant-a"),
+            [
+                _event(
+                    f"bulk-{i}",
+                    "crash",
+                    "java_crash",
+                    {"stackTrace": "at app.Safe.run(Safe.java:10)"},
+                    "5.0.0",
+                    "bulk-installation",
+                )
+                for i in range(500)
+            ],
+            key_ring,
+        )
+        await session.commit()
+    result = await client.get(
+        "/v1/query/release-health",
+        headers=auth(credentials["viewer-a"]),
+        params=window_params(newRelease="5.0.0", baselineRelease="1.0.0"),
+    )
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["newRelease"]["eligibleSampleCount"] == 500
+    assert body["newRelease"]["metrics"]["javaCrashEvents"]["value"] == 500
+    assert body["newRelease"]["metrics"]["activeInstallations"]["value"] == 1
+    assert sum(point["newJavaCrashEvents"] for point in body["trend"]) == 500
+    quality = await client.get(
+        "/v1/query/data-quality",
+        headers=auth(credentials["viewer-a"]),
+        params=window_params(releaseVersion="5.0.0"),
+    )
+    assert quality.status_code == 200
+    assert quality.json()["sampleCount"] == 500
+    assert quality.json()["schemaVersionCounts"] == {"3": 500}
 
 
 @pytest.mark.asyncio

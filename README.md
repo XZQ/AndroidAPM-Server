@@ -1,5 +1,7 @@
 # AndroidAPM-Server
 
+Query filters run in SQL before budgeting. SQL reduces repeated events into weighted occurrence buckets; `APM_QUERY_MAX_ROWS` bounds aggregate groups rather than raw events. Investigator pagination is independently page-bounded. Queries have a 5-second driver/PostgreSQL statement budget and never return partial aggregates; migration `20260907_0004` adds release/time and fingerprint/time indexes.
+
 Windows crossing installation HMAC key versions report `INSTALLATION_HMAC_CONTINUITY_BREAK` with null installation counts/ratios/deltas; event counts remain usable. Issue distributions and trends also preserve this gap. Replay verification still uses each row's original key version.
 
 Release installation ratios require complete occurrence identity, valid SDK emission/drop samples, no reported loss or late events, at least `APM_QUERY_MIN_INSTALLATIONS=100` installations and `APM_QUERY_MIN_SDK_HEALTH_COVERAGE=1.0` installation health coverage. Missing quality returns an explicit state and null ratio; observed event counts remain available.

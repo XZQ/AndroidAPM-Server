@@ -146,6 +146,24 @@ class InboxEvent(Base):
             "release_identity_quality",
         ),
         Index("ix_inbox_incident_fingerprint", "tenant_id", "incident_fingerprint"),
+        Index(
+            "ix_inbox_release_time",
+            "tenant_id",
+            "app_id",
+            "environment",
+            "app_version",
+            "occurrence_timestamp_ms",
+            "id",
+        ),
+        Index(
+            "ix_inbox_fingerprint_time",
+            "tenant_id",
+            "app_id",
+            "environment",
+            "incident_fingerprint",
+            "occurrence_timestamp_ms",
+            "id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BIGINT_PRIMARY_KEY, primary_key=True, autoincrement=True)

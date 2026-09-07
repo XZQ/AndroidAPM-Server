@@ -24,7 +24,7 @@ from androidapm_server.constants import (
     QUERY_STATE_ZERO,
 )
 from androidapm_server.db.models import InboxEvent, ReleaseDecision
-from androidapm_server.db.query import QueryFact
+from androidapm_server.db.query import QueryFact, query_bucket_ms
 from androidapm_server.domain import IdentityQuality
 from androidapm_server.errors import ApiError
 from androidapm_server.query_auth import QueryPrincipal
@@ -456,6 +456,7 @@ def build_top_fingerprints(
     """Aggregate exact Crash/ANR fingerprints while keeping all raw evidence private."""
     declared = [fact for fact in facts if fact.app_version == release_version]
     eligible = [fact for fact in declared if _occurrence_bound(fact)]
+    continuity_reason = _installation_continuity_reason(eligible)
     incidents = [fact for fact in eligible if (fact.module, fact.name) in INCIDENT_EVENTS]
     fingerprinted = [fact for fact in incidents if fact.incident_fingerprint is not None]
     grouped: dict[tuple[str, str], list[QueryFact]] = defaultdict(list)
@@ -467,15 +468,17 @@ def build_top_fingerprints(
         FingerprintItem(
             fingerprint=fingerprint,
             event_family=event_family,
-            event_count=len(group),
-            affected_installation_count=_installation_count(group, eligible),
+            event_count=_sample_count(group),
+            affected_installation_count=_installation_count(group, continuity_reason),
             first_seen_ms=min(fact.occurrence_timestamp_ms for fact in group),
-            last_seen_ms=max(fact.occurrence_timestamp_ms for fact in group),
+            last_seen_ms=max(
+                fact.last_occurrence_timestamp_ms or fact.occurrence_timestamp_ms for fact in group
+            ),
         )
         for (fingerprint, event_family), group in grouped.items()
     ]
     items.sort(key=lambda item: (-item.event_count, -item.last_seen_ms, item.fingerprint))
-    coverage = len(fingerprinted) / len(incidents) if incidents else None
+    coverage = _sample_count(fingerprinted) / _sample_count(incidents) if incidents else None
     if not declared:
         state = QUERY_STATE_NO_DATA
     elif not eligible:
@@ -484,11 +487,11 @@ def build_top_fingerprints(
         state = QUERY_STATE_ZERO
     elif not fingerprinted:
         state = QUERY_STATE_UNAVAILABLE
-    elif len(fingerprinted) < len(incidents):
+    elif _sample_count(fingerprinted) < _sample_count(incidents):
         state = QUERY_STATE_DEGRADED
     else:
         state = QUERY_STATE_PRESENT
-    if _installation_continuity_reason(eligible) and incidents:
+    if continuity_reason and incidents:
         state = QUERY_STATE_DEGRADED
     return FingerprintResponse(
         request_id=request_id,
@@ -496,9 +499,9 @@ def build_top_fingerprints(
         window=QueryWindow(from_ms=from_ms, to_ms=to_ms),
         release_version=release_version,
         state=state,
-        sample_count=len(incidents),
+        sample_count=_sample_count(incidents),
         fingerprint_coverage=coverage,
-        installation_reason=_installation_continuity_reason(eligible),
+        installation_reason=continuity_reason,
         items=items[:limit],
     )
 
@@ -566,10 +569,16 @@ def build_issue_detail(
         state=state,
         reason=reason,
         event_family=event_family,
-        event_count=len(eligible),
-        affected_installation_count=_installation_count(eligible, eligible),
+        event_count=_sample_count(eligible),
+        affected_installation_count=_installation_count(eligible, continuity_reason),
         first_seen_ms=min((fact.occurrence_timestamp_ms for fact in eligible), default=None),
-        last_seen_ms=max((fact.occurrence_timestamp_ms for fact in eligible), default=None),
+        last_seen_ms=max(
+            (
+                fact.last_occurrence_timestamp_ms or fact.occurrence_timestamp_ms
+                for fact in eligible
+            ),
+            default=None,
+        ),
         trend=_issue_trend(eligible, from_ms, to_ms),
         releases=release_distribution,
         scenes=scene_distribution,
@@ -586,6 +595,7 @@ def _issue_distribution(
     unavailable_reason: str,
 ) -> IssueDistribution:
     """Build a deterministic top-10 aggregate for one allow-listed Issue dimension."""
+    continuity_reason = _installation_continuity_reason(facts)
     grouped: dict[str, list[QueryFact]] = defaultdict(list)
     for fact in facts:
         label = value_for(fact)
@@ -594,8 +604,8 @@ def _issue_distribution(
     items = [
         IssueDistributionItem(
             label=label,
-            event_count=len(group),
-            affected_installation_count=_installation_count(group, facts),
+            event_count=_sample_count(group),
+            affected_installation_count=_installation_count(group, continuity_reason),
         )
         for label, group in grouped.items()
     ]
@@ -623,12 +633,10 @@ def _issue_trend(
     to_ms: int,
 ) -> list[IssueTrendPoint]:
     """Return at most 24 explicit occurrence buckets, including real zero buckets."""
-    target_buckets = 24
-    minute_ms = 60_000
     window_ms = to_ms - from_ms
-    raw_bucket_ms = (window_ms + target_buckets - 1) // target_buckets
-    bucket_ms = max(minute_ms, ((raw_bucket_ms + minute_ms - 1) // minute_ms) * minute_ms)
+    bucket_ms = query_bucket_ms(from_ms, to_ms)
     bucket_count = (window_ms + bucket_ms - 1) // bucket_ms
+    continuity_reason = _installation_continuity_reason(facts)
     grouped: dict[int, list[QueryFact]] = defaultdict(list)
     for fact in facts:
         bucket_index = (fact.occurrence_timestamp_ms - from_ms) // bucket_ms
@@ -642,8 +650,8 @@ def _issue_trend(
             IssueTrendPoint(
                 bucket_start_ms=bucket_start,
                 bucket_end_ms=min(bucket_start + bucket_ms, to_ms),
-                event_count=len(group),
-                affected_installation_count=_installation_count(group, facts),
+                event_count=_sample_count(group),
+                affected_installation_count=_installation_count(group, continuity_reason),
             )
         )
     return points
@@ -657,11 +665,8 @@ def _release_incident_trend(
     to_ms: int,
 ) -> list[ReleaseTrendPoint]:
     """Return bounded real-zero buckets for exact Crash/ANR release comparison."""
-    target_buckets = 24
-    minute_ms = 60_000
     window_ms = to_ms - from_ms
-    raw_bucket_ms = (window_ms + target_buckets - 1) // target_buckets
-    bucket_ms = max(minute_ms, ((raw_bucket_ms + minute_ms - 1) // minute_ms) * minute_ms)
+    bucket_ms = query_bucket_ms(from_ms, to_ms)
     bucket_count = (window_ms + bucket_ms - 1) // bucket_ms
     grouped: dict[int, Counter[tuple[str | None, str]]] = defaultdict(Counter)
     for fact in facts:
@@ -671,7 +676,9 @@ def _release_incident_trend(
             continue
         bucket_index = (fact.occurrence_timestamp_ms - from_ms) // bucket_ms
         if 0 <= bucket_index < bucket_count:
-            grouped[bucket_index][(fact.app_version, _event_family(fact.module, fact.name))] += 1
+            grouped[bucket_index][(fact.app_version, _event_family(fact.module, fact.name))] += (
+                fact.weight
+            )
     points: list[ReleaseTrendPoint] = []
     for index in range(bucket_count):
         counts = grouped[index]
@@ -704,10 +711,12 @@ def build_data_quality(
         if release_version is not None
         else facts
     )
-    sample_count = len(selected)
-    occurrence_count = sum(_occurrence_bound(fact) for fact in selected)
+    sample_count = _sample_count(selected)
+    occurrence_count = sum(fact.weight for fact in selected if _occurrence_bound(fact))
     installation_count = sum(
-        _occurrence_bound(fact) and fact.installation_hmac is not None for fact in selected
+        fact.weight
+        for fact in selected
+        if _occurrence_bound(fact) and fact.installation_hmac is not None
     )
     sdk_facts = [fact for fact in selected if (fact.module, fact.name) == ("core", "sdk_health")]
     dropped = [
@@ -716,7 +725,7 @@ def build_data_quality(
         if (fact.sdk_drop_count is not None and fact.sdk_drop_count > 0)
         or (fact.sdk_drop_rate is not None and fact.sdk_drop_rate > 0)
     ]
-    late_count = sum(_is_late(fact, late_after_ms) for fact in selected)
+    late_count = sum(fact.weight for fact in selected if _is_late(fact, late_after_ms))
     release_metric = _coverage_metric(
         occurrence_count,
         sample_count,
@@ -766,11 +775,13 @@ def build_data_quality(
         release_version=release_version,
         state=state,
         sample_count=sample_count,
-        protocol_counts=dict(sorted(Counter(fact.protocol for fact in selected).items())),
+        protocol_counts=dict(sorted(_fact_counts(selected, lambda fact: fact.protocol).items())),
         schema_version_counts=dict(
-            sorted(Counter(fact.schema_version for fact in selected).items())
+            sorted(_fact_counts(selected, lambda fact: fact.schema_version).items())
         ),
-        inbox_status_counts=dict(sorted(Counter(fact.inbox_status for fact in selected).items())),
+        inbox_status_counts=dict(
+            sorted(_fact_counts(selected, lambda fact: fact.inbox_status).items())
+        ),
         release_identity=release_metric,
         installation_identity=installation_metric,
         sdk_health=sdk_metric,
@@ -939,18 +950,24 @@ def _release_slice(
     declared = [fact for fact in facts if fact.app_version == release_version]
     eligible = [fact for fact in declared if _occurrence_bound(fact)]
     incidents = [fact for fact in eligible if (fact.module, fact.name) in INCIDENT_EVENTS]
-    java_count = sum((fact.module, fact.name) == ("crash", "java_crash") for fact in incidents)
-    anr_count = sum((fact.module, fact.name) == ("anr", "anr_detected") for fact in incidents)
+    java_count = sum(
+        fact.weight for fact in incidents if (fact.module, fact.name) == ("crash", "java_crash")
+    )
+    anr_count = sum(
+        fact.weight for fact in incidents if (fact.module, fact.name) == ("anr", "anr_detected")
+    )
     active_installations = {
         fact.installation_hmac for fact in eligible if fact.installation_hmac is not None
     }
     affected_installations = {
         fact.installation_hmac for fact in incidents if fact.installation_hmac is not None
     }
-    installation_eligible = sum(fact.installation_hmac is not None for fact in eligible)
-    release_coverage = len(eligible) / len(declared) if declared else None
-    installation_coverage = installation_eligible / len(eligible) if eligible else None
-    late_count = sum(_is_late(fact, late_after_ms) for fact in eligible)
+    installation_eligible = sum(
+        fact.weight for fact in eligible if fact.installation_hmac is not None
+    )
+    release_coverage = _sample_count(eligible) / _sample_count(declared) if declared else None
+    installation_coverage = installation_eligible / _sample_count(eligible) if eligible else None
+    late_count = sum(fact.weight for fact in eligible if _is_late(fact, late_after_ms))
     sdk_facts = [fact for fact in eligible if (fact.module, fact.name) == ("core", "sdk_health")]
     dropped = [
         fact
@@ -965,8 +982,12 @@ def _release_slice(
         dropped,
         late_count,
     )
-    java_metric = _count_metric(java_count, len(eligible), as_of_ms, quality_state, quality_reason)
-    anr_metric = _count_metric(anr_count, len(eligible), as_of_ms, quality_state, quality_reason)
+    java_metric = _count_metric(
+        java_count, _sample_count(eligible), as_of_ms, quality_state, quality_reason
+    )
+    anr_metric = _count_metric(
+        anr_count, _sample_count(eligible), as_of_ms, quality_state, quality_reason
+    )
     if not declared:
         active_metric = _metric(QUERY_STATE_NO_DATA, as_of_ms, 0)
         affected_metric = _metric(QUERY_STATE_NO_DATA, as_of_ms, 0)
@@ -975,7 +996,7 @@ def _release_slice(
         active_metric = _metric(
             QUERY_STATE_UNAVAILABLE,
             as_of_ms,
-            len(declared),
+            _sample_count(declared),
             reason=OCCURRENCE_UNAVAILABLE_REASON,
         )
         affected_metric = active_metric.model_copy()
@@ -984,21 +1005,23 @@ def _release_slice(
         active_metric = _metric(
             QUERY_STATE_UNAVAILABLE,
             as_of_ms,
-            len(eligible),
+            _sample_count(eligible),
             reason=INSTALLATION_UNAVAILABLE_REASON,
         )
         affected_metric = active_metric.model_copy()
         ratio_metric = active_metric.model_copy()
     else:
         install_state = (
-            QUERY_STATE_DEGRADED if installation_eligible < len(eligible) else QUERY_STATE_PRESENT
+            QUERY_STATE_DEGRADED
+            if installation_eligible < _sample_count(eligible)
+            else QUERY_STATE_PRESENT
         )
         active_count = len(active_installations)
         affected_count = len(affected_installations)
         active_metric = _metric(
             QUERY_STATE_ZERO if active_count == 0 else install_state,
             as_of_ms,
-            len(eligible),
+            _sample_count(eligible),
             value=active_count,
             coverage=installation_coverage,
         )
@@ -1007,10 +1030,11 @@ def _release_slice(
             if affected_count == 0 and install_state == QUERY_STATE_PRESENT
             else install_state,
             as_of_ms,
-            len(incidents),
+            _sample_count(incidents),
             value=affected_count,
             coverage=(
-                sum(fact.installation_hmac is not None for fact in incidents) / len(incidents)
+                sum(fact.weight for fact in incidents if fact.installation_hmac is not None)
+                / _sample_count(incidents)
                 if incidents
                 else 1.0
             ),
@@ -1019,7 +1043,7 @@ def _release_slice(
             ratio_metric = _metric(
                 QUERY_STATE_DEGRADED,
                 as_of_ms,
-                len(eligible),
+                _sample_count(eligible),
                 numerator=affected_count,
                 denominator=active_count,
                 coverage=installation_coverage,
@@ -1029,7 +1053,7 @@ def _release_slice(
             ratio_metric = _metric(
                 QUERY_STATE_NO_DATA,
                 as_of_ms,
-                len(eligible),
+                _sample_count(eligible),
                 numerator=affected_count,
                 denominator=0,
             )
@@ -1038,7 +1062,7 @@ def _release_slice(
             ratio_metric = _metric(
                 QUERY_STATE_ZERO if affected_count == 0 else QUERY_STATE_PRESENT,
                 as_of_ms,
-                len(eligible),
+                _sample_count(eligible),
                 value=ratio,
                 numerator=affected_count,
                 denominator=active_count,
@@ -1046,46 +1070,49 @@ def _release_slice(
             )
     fingerprints = {fact.incident_fingerprint for fact in incidents if fact.incident_fingerprint}
     fingerprint_coverage = (
-        sum(fact.incident_fingerprint is not None for fact in incidents) / len(incidents)
+        sum(fact.weight for fact in incidents if fact.incident_fingerprint is not None)
+        / _sample_count(incidents)
         if incidents
         else None
     )
     if not incidents and eligible:
-        fingerprint_metric = _metric(QUERY_STATE_ZERO, as_of_ms, len(eligible), value=0)
+        fingerprint_metric = _metric(QUERY_STATE_ZERO, as_of_ms, _sample_count(eligible), value=0)
     elif incidents and not fingerprints:
         fingerprint_metric = _metric(
             QUERY_STATE_UNAVAILABLE,
             as_of_ms,
-            len(incidents),
+            _sample_count(incidents),
             reason="INCIDENT_FINGERPRINT_NOT_PROVIDED",
         )
     elif incidents:
         fingerprint_metric = _metric(
             QUERY_STATE_DEGRADED if fingerprint_coverage != 1.0 else QUERY_STATE_PRESENT,
             as_of_ms,
-            len(incidents),
+            _sample_count(incidents),
             value=len(fingerprints),
             coverage=fingerprint_coverage,
         )
     else:
-        fingerprint_metric = _metric(quality_state, as_of_ms, len(declared), reason=quality_reason)
+        fingerprint_metric = _metric(
+            quality_state, as_of_ms, _sample_count(declared), reason=quality_reason
+        )
     late_metric = (
         _metric(QUERY_STATE_NO_DATA, as_of_ms, 0)
         if not declared
         else _metric(
             QUERY_STATE_UNAVAILABLE,
             as_of_ms,
-            len(declared),
+            _sample_count(declared),
             reason=OCCURRENCE_UNAVAILABLE_REASON,
         )
         if not eligible
         else _metric(
             QUERY_STATE_LATE if late_count else QUERY_STATE_ZERO,
             as_of_ms,
-            len(eligible),
-            value=late_count / len(eligible),
+            _sample_count(eligible),
+            value=late_count / _sample_count(eligible),
             numerator=late_count,
-            denominator=len(eligible),
+            denominator=_sample_count(eligible),
         )
     )
     sdk_metric = _sdk_health_metric(sdk_facts, as_of_ms)
@@ -1115,7 +1142,7 @@ def _release_slice(
         ratio_metric = _metric(
             gate_state,
             as_of_ms,
-            len(eligible),
+            _sample_count(eligible),
             numerator=len(affected_installations),
             denominator=len(active_installations),
             coverage=installation_coverage,
@@ -1125,15 +1152,15 @@ def _release_slice(
     session_metric = _metric(
         QUERY_STATE_UNAVAILABLE,
         as_of_ms,
-        len(eligible),
+        _sample_count(eligible),
         reason=SESSION_UNAVAILABLE_REASON,
     )
     return ReleaseSlice(
         release_version=release_version,
         state=quality_state,
-        declared_sample_count=len(declared),
-        eligible_sample_count=len(eligible),
-        excluded_non_occurrence_count=len(declared) - len(eligible),
+        declared_sample_count=_sample_count(declared),
+        eligible_sample_count=_sample_count(eligible),
+        excluded_non_occurrence_count=_sample_count(declared) - _sample_count(eligible),
         release_identity_coverage=release_coverage,
         installation_identity_coverage=installation_coverage,
         metrics=ReleaseMetricSet(
@@ -1171,14 +1198,14 @@ def _sdk_health_metric(facts: list[QueryFact], as_of_ms: int) -> MetricResult:
         return _metric(
             QUERY_STATE_UNAVAILABLE,
             as_of_ms,
-            len(facts),
+            _sample_count(facts),
             reason="SDK_HEALTH_FIELDS_OR_SAMPLE_INVALID",
         )
     dropped = any((fact.sdk_drop_count or 0) > 0 or (fact.sdk_drop_rate or 0) > 0 for fact in facts)
     return _metric(
         QUERY_STATE_DEGRADED if dropped else QUERY_STATE_ZERO,
         as_of_ms,
-        len(facts),
+        _sample_count(facts),
         value=max(fact.sdk_drop_rate for fact in facts if fact.sdk_drop_rate is not None),
         reason="SDK_REPORTED_DROPS" if dropped else None,
     )
@@ -1196,9 +1223,9 @@ def _release_quality_state(
         return QUERY_STATE_NO_DATA, None
     if not eligible:
         return QUERY_STATE_UNAVAILABLE, OCCURRENCE_UNAVAILABLE_REASON
-    if len(eligible) < len(declared):
+    if _sample_count(eligible) < _sample_count(declared):
         return QUERY_STATE_DEGRADED, "RELEASE_IDENTITY_COVERAGE_INCOMPLETE"
-    if installation_eligible < len(eligible):
+    if installation_eligible < _sample_count(eligible):
         return QUERY_STATE_DEGRADED, "INSTALLATION_IDENTITY_COVERAGE_INCOMPLETE"
     if dropped:
         return QUERY_STATE_DEGRADED, "SDK_REPORTED_DROPS"
@@ -1312,13 +1339,26 @@ def _installation_continuity_reason(facts: list[QueryFact]) -> str | None:
     return None
 
 
-def _installation_count(facts: list[QueryFact], window: list[QueryFact]) -> int | None:
+def _installation_count(facts: list[QueryFact], continuity_reason: str | None) -> int | None:
     """Count distinct pseudonyms only within one verified key epoch and complete identity."""
-    if _installation_continuity_reason(window):
+    if continuity_reason:
         return None
     if any(fact.installation_hmac is None for fact in facts):
         return None
     return len({fact.installation_hmac for fact in facts})
+
+
+def _sample_count(facts: list[QueryFact]) -> int:
+    """Count original events represented by the SQL projection."""
+    return sum(fact.weight for fact in facts)
+
+
+def _fact_counts(facts: list[QueryFact], value_for: Callable[[QueryFact], str]) -> Counter[str]:
+    """Preserve exact event counts in low-cardinality quality distributions."""
+    counts: Counter[str] = Counter()
+    for fact in facts:
+        counts[value_for(fact)] += fact.weight
+    return counts
 
 
 def _occurrence_bound(fact: QueryFact) -> bool:
@@ -1328,6 +1368,8 @@ def _occurrence_bound(fact: QueryFact) -> bool:
 
 def _is_late(fact: QueryFact, late_after_ms: int) -> bool:
     """Compare receive time to occurrence time without mixing either query axis."""
+    if fact.late is not None:
+        return fact.late
     received_ms = int(_aware(fact.received_at).timestamp() * 1_000)
     return received_ms - fact.occurrence_timestamp_ms > late_after_ms
 

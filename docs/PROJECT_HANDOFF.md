@@ -16,6 +16,8 @@
 
 5. HMAC 轮换：查询读取真实 key version，对跨版本窗口/比较显式返回安装连续性断点；覆盖 API 入库到查询及 Issue/trend/distribution，前端显示空缺而非双计数。
 
+6. 查询预算：SQL 过滤/加权聚合、分页解除整窗预检、5 秒查询时限、新增筛选时间索引。测试证明 500 个同类事件在 100 组预算下保留准确计数；SQLite 迁移 upgrade/check/downgrade/upgrade/check 通过，PostgreSQL 执行计划与建索引耗时尚无现场证据。
+
 ## 2026-09-04 多路由 APM 控制台与 Issue 聚合（历史）
 
 本轮把原有发布健康长页面升级为同源多路由诊断控制台：总览、Issues、Issue 详情、investigator 事件探索/详情、版本发布和数据质量均有独立可恢复 URL；性能、告警和设置以 `UNAVAILABLE`/`UNCONFIGURED` 页面公开真实建设边界。viewer 导航不显示事件枚举入口，直接访问事件页也只返回权限说明；L2 raw 不自动读取，仍要求 purpose/reason 并等待服务端审计提交。

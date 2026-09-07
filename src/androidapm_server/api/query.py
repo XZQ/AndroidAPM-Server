@@ -12,7 +12,6 @@ from androidapm_server.config import Settings, get_settings
 from androidapm_server.constants import QUERY_RAW_PURPOSES, QUERY_RELEASE_DECISIONS
 from androidapm_server.db.models import AuditLog, ReleaseDecision
 from androidapm_server.db.query import (
-    ensure_query_budget,
     get_scoped_event,
     list_release_decisions,
     list_scoped_events,
@@ -77,7 +76,15 @@ async def get_release_health(
     baseline_release = _validate_identifier(baseline_release, "baselineRelease", 128)
     if new_release == baseline_release:
         raise ApiError(400, "invalid_release_comparison", "The two releases must be different")
-    facts = await load_window_facts(session, principal, from_ms, to_ms, settings.query_max_rows)
+    facts = await load_window_facts(
+        session,
+        principal,
+        from_ms,
+        to_ms,
+        settings.query_max_rows,
+        release_versions=(new_release, baseline_release),
+        late_after_ms=settings.query_late_after_seconds * 1000,
+    )
     _no_store(response)
     return build_release_health(
         request.state.request_id,
@@ -110,7 +117,15 @@ async def get_top_fingerprints(
     _validate_window(from_ms, to_ms, settings)
     release_version = _validate_identifier(release_version, "releaseVersion", 128)
     _validate_limit(limit, settings)
-    facts = await load_window_facts(session, principal, from_ms, to_ms, settings.query_max_rows)
+    facts = await load_window_facts(
+        session,
+        principal,
+        from_ms,
+        to_ms,
+        settings.query_max_rows,
+        release_versions=(release_version,),
+        late_after_ms=settings.query_late_after_seconds * 1000,
+    )
     _no_store(response)
     return build_top_fingerprints(
         request.state.request_id,
@@ -140,7 +155,15 @@ async def get_issue_detail(
     validated_fingerprint = _optional_fingerprint(fingerprint)
     if validated_fingerprint is None:  # pragma: no cover - the path always supplies a value
         raise ApiError(400, "invalid_query_filter", "The fingerprint filter is invalid")
-    facts = await load_window_facts(session, principal, from_ms, to_ms, settings.query_max_rows)
+    facts = await load_window_facts(
+        session,
+        principal,
+        from_ms,
+        to_ms,
+        settings.query_max_rows,
+        fingerprint=validated_fingerprint,
+        late_after_ms=settings.query_late_after_seconds * 1000,
+    )
     _no_store(response)
     return build_issue_detail(
         request.state.request_id,
@@ -168,7 +191,15 @@ async def get_data_quality(
     _validate_window(from_ms, to_ms, settings)
     if release_version is not None:
         release_version = _validate_identifier(release_version, "releaseVersion", 128)
-    facts = await load_window_facts(session, principal, from_ms, to_ms, settings.query_max_rows)
+    facts = await load_window_facts(
+        session,
+        principal,
+        from_ms,
+        to_ms,
+        settings.query_max_rows,
+        release_versions=(release_version,) if release_version is not None else None,
+        late_after_ms=settings.query_late_after_seconds * 1000,
+    )
     _no_store(response)
     return build_data_quality(
         request.state.request_id,
@@ -206,7 +237,6 @@ async def get_events(
     module = _optional_identifier(module, "module", 256)
     name = _optional_identifier(name, "name", 256)
     fingerprint = _optional_fingerprint(fingerprint)
-    await ensure_query_budget(session, principal, from_ms, to_ms, settings.query_max_rows)
     filter_hash = cursor_filter_hash(
         principal, from_ms, to_ms, release_version, module, name, fingerprint
     )

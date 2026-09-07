@@ -297,3 +297,6 @@ Evidence drawer
 # 2026-09-07 比例质量门禁
 
 安装影响率默认要求 100 个独立安装（`APM_QUERY_MIN_INSTALLATIONS`）和 100% 安装级 SDK health 覆盖（`APM_QUERY_MIN_SDK_HEALTH_COVERAGE`）。同时要求发生时版本/安装身份完整、无已报告丢弃、无迟到事件；任一条件不满足返回 null 比例及明确 reason，比较差值也为 null。SDK health 必须有有效 `emitCount > 0`、`dropCount >= 0`、`0 <= dropRate <= 1` 才能声明真实零丢弃，字段缺失/无效/无发出样本为 UNAVAILABLE。指标表达的是收到的安装样本；SDK 自报告覆盖不证明全部真实用户已接入监控。已接收事件的确切计数继续展示，不用采样不足抹去事故。
+# 2026-09-07 查询执行预算
+
+版本和指纹过滤下推到 SQL。数据库按身份/指纹/场景/协议/状态、相同迟到状态及至多 24 个时间桶合并事件，保留 weight、首次/最近时间、SDK 字段有效性和最大丢弃率；应用端按 weight 计算精确事件数，安装仍按 HMAC 去重。`APM_QUERY_MAX_ROWS` 现在限制聚合组数（默认 10000），不再直接限制原始事件数。事件分页只读取 limit+1，并保留 scope/filter/window 绑定游标。所有聚合/列表 SQL 有 5 秒预算，PostgreSQL 同时设置事务级 statement_timeout；超时为 retryable 503，不返回部分统计。高安装/指纹/场景基数组合仍可能超过组预算，需缩窄查询或建设独立 OLAP rollup，不提高上限掩盖规模边界。索引迁移 `20260907_0004` 为 append-only；生产执行前需安排建索引窗口。
