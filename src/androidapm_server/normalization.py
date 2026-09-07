@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-from androidapm_server.constants import NORMALIZATION_VERSION
+from androidapm_server.constants import (
+    MAX_FUTURE_SKEW_SECONDS,
+    NORMALIZATION_VERSION,
+    OTLP_INT64_MAX,
+    OTLP_INT64_MIN,
+)
 from androidapm_server.domain import ApmEvent
 
 FieldType = Literal["integer", "number", "boolean", "string"]
@@ -145,6 +151,16 @@ def normalize_event(event: ApmEvent) -> NormalizationResult:
             field_states[name] = "MISSING"
             continue
         converted = _coerce_registered(event.fields[name], definition.field_type)
+        if isinstance(converted, (int, float)) and not isinstance(converted, bool):
+            # Physical counts/durations and ratios have semantic bounds as well as wire bounds.
+            if definition.unit in {"events", "bytes", "ms", "ms_epoch", "ratio"} and converted < 0:
+                converted = _INVALID
+            elif definition.unit == "ratio" and converted > 1:
+                converted = _INVALID
+            elif definition.unit == "ms_epoch" and (
+                converted <= 0 or converted > event.timestamp + MAX_FUTURE_SKEW_SECONDS * 1_000
+            ):
+                converted = _INVALID
         if converted is _INVALID:
             field_states[name] = "INVALID"
             continue
@@ -240,11 +256,14 @@ def _coerce_registered(value: Any, expected: FieldType) -> Any:
                 return _INVALID
             if isinstance(value, str) and str(converted) != value:
                 return _INVALID
+            if not OTLP_INT64_MIN <= converted <= OTLP_INT64_MAX:
+                return _INVALID
             return converted
         if expected == "number":
             if isinstance(value, bool):
                 return _INVALID
-            return float(value)
+            number = float(value)
+            return number if math.isfinite(number) else _INVALID
         if expected == "boolean":
             if isinstance(value, bool):
                 return value

@@ -9,14 +9,16 @@ import uuid
 import structlog
 
 from androidapm_server.config import get_settings
+from androidapm_server.db.models import InboxEvent
 from androidapm_server.db.session import get_session_factory
 from androidapm_server.db.worker import claim_batch, mark_delivered, mark_failed
 from androidapm_server.logging import configure_logging
 from androidapm_server.metrics import EXPORT_EVENTS, EXPORT_REQUEST_SECONDS
 from androidapm_server.otlp import build_logs_request
-from androidapm_server.otlp.client import OtlpLogsClient
+from androidapm_server.otlp.client import ExportResult, OtlpLogsClient
 
 logger = structlog.get_logger(__name__)
+MAPPING_ERRORS = (KeyError, TypeError, ValueError, OverflowError)
 
 
 async def export_once(client: OtlpLogsClient, owner: str) -> int:
@@ -36,27 +38,75 @@ async def export_once(client: OtlpLogsClient, owner: str) -> int:
     if not events:
         return 0
 
-    request = build_logs_request(events)
-    with EXPORT_REQUEST_SECONDS.time():
-        result = await client.export(request.SerializeToString())
-    async with factory() as session:
-        if result.success:
-            changed = await mark_delivered(session, owner, [event.id for event in events])
-            EXPORT_EVENTS.labels("delivered").inc(changed)
-        else:
+    payload, exportable, invalid = _encode_isolated_batch(events)
+    changed = 0
+    if invalid:
+        async with factory() as session:
             changed = await mark_failed(
                 session,
                 owner,
-                events,
+                invalid,
+                False,
+                settings.worker_max_attempts,
+                "otlp_mapping_failed",
+                "The persisted event cannot be mapped to OTLP",
+            )
+            await session.commit()
+            EXPORT_EVENTS.labels("dead_letter").inc(changed)
+    if not exportable:
+        return changed
+    try:
+        with EXPORT_REQUEST_SECONDS.time():
+            result = await client.export(payload)
+    except Exception:
+        # Unexpected transport failures must consume the same bounded retry budget. Never
+        # persist an exception message that could contain payloads or transport credentials.
+        result = ExportResult(False, True, "export_internal_error", "OTLP transport failed")
+    async with factory() as session:
+        if result.success:
+            completed = await mark_delivered(session, owner, [event.id for event in exportable])
+            EXPORT_EVENTS.labels("delivered").inc(completed)
+        else:
+            completed = await mark_failed(
+                session,
+                owner,
+                exportable,
                 result.retryable,
                 settings.worker_max_attempts,
                 result.error_code or "unknown_export_error",
                 result.error_message or "OTLP export failed",
                 result.retry_after_seconds,
             )
-            EXPORT_EVENTS.labels("retry" if result.retryable else "dead_letter").inc(changed)
+            # An exhausted retryable failure is a dead letter, not another retry.
+            for event in exportable:
+                label = (
+                    "retry"
+                    if result.retryable and event.attempt_count < settings.worker_max_attempts
+                    else "dead_letter"
+                )
+                if completed == len(exportable):
+                    EXPORT_EVENTS.labels(label).inc()
         await session.commit()
-    return changed
+    return changed + completed
+
+
+def _encode_isolated_batch(
+    events: list[InboxEvent],
+) -> tuple[bytes, list[InboxEvent], list[InboxEvent]]:
+    """Use one encoding on the healthy path; isolate deterministic historical bad rows."""
+    try:
+        return build_logs_request(events).SerializeToString(), events, []
+    except MAPPING_ERRORS:
+        valid, invalid = [], []
+        for event in events:
+            try:
+                build_logs_request([event]).SerializeToString()
+            except MAPPING_ERRORS:
+                invalid.append(event)
+            else:
+                valid.append(event)
+        payload = build_logs_request(valid).SerializeToString() if valid else b""
+        return payload, valid, invalid
 
 
 async def worker_loop() -> None:

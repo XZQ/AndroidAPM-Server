@@ -20,6 +20,8 @@ durable raw event
 
 ## 当前实现与目标差距
 
+2026-09-07：normalization v2 对注册整数执行 OTLP int64 边界、对数值执行有限数校验，并检查计数/时长非负、比率 0–1 和历史退出时间范围。非法派生字段标记 INVALID，原始值继续保留，不让 NaN/Infinity 重新进入 PostgreSQL JSON。历史已入库坏行若无法映射，export worker 单独标记 recoverable dead letter，正常同批继续导出；非预期传输异常也必须消耗有限重试预算。
+
 | 能力 | 当前代码事实 | 生产目标 |
 | --- | --- | --- |
 | OTLP signal | 仅实现 OTLP Logs | 注册表覆盖后再增加确定性的 Metrics；Trace 需有效 span 契约 |
