@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from androidapm_server.auth import PASSWORD_HASHER
+from androidapm_server.auth_budget import AUTH_ATTEMPTS, HASH_VERIFIER
 from androidapm_server.constants import QUERY_ROLE_INVESTIGATOR, QUERY_ROLES
 from androidapm_server.db.models import QueryKey, Tenant
 from androidapm_server.errors import ApiError
@@ -47,14 +48,15 @@ async def authenticate_query_key(
     authorization: str | None,
 ) -> QueryPrincipal:
     """Verify a Query key and derive every data-scope dimension from storage."""
+    AUTH_ATTEMPTS.consume()
     key_id, secret = _parse_query_bearer(authorization)
     row = await _load_query_key(session, key_id)
     if row is None:
-        _verify_dummy(secret)
+        await _verify_dummy(secret)
         raise _invalid_query_credential()
     query_key, tenant = row
     try:
-        PASSWORD_HASHER.verify(query_key.key_hash, secret)
+        await HASH_VERIFIER.verify(PASSWORD_HASHER.verify, query_key.key_hash, secret)
     except (InvalidHashError, VerificationError, VerifyMismatchError) as error:
         raise _invalid_query_credential() from error
 
@@ -120,7 +122,7 @@ def require_investigator(principal: QueryPrincipal) -> None:
 
 def _parse_query_bearer(authorization: str | None) -> tuple[str, str]:
     """Parse a versioned Query Bearer key without accepting other key audiences."""
-    if authorization is None or not authorization.startswith("Bearer "):
+    if authorization is None or len(authorization) > 256 or not authorization.startswith("Bearer "):
         raise _invalid_query_credential()
     parts = authorization.removeprefix("Bearer ").split(QUERY_KEY_SEPARATOR, maxsplit=2)
     if len(parts) != 3 or parts[0] != QUERY_KEY_PREFIX or not parts[1] or not parts[2]:
@@ -128,10 +130,10 @@ def _parse_query_bearer(authorization: str | None) -> tuple[str, str]:
     return parts[1], parts[2]
 
 
-def _verify_dummy(secret: str) -> None:
+async def _verify_dummy(secret: str) -> None:
     """Narrow timing differences when an unknown Query key id is supplied."""
     try:
-        PASSWORD_HASHER.verify(QUERY_DUMMY_HASH, secret)
+        await HASH_VERIFIER.verify(PASSWORD_HASHER.verify, QUERY_DUMMY_HASH, secret)
     except (InvalidHashError, VerificationError, VerifyMismatchError):
         pass
 

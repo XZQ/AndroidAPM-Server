@@ -11,6 +11,7 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from androidapm_server.auth_budget import AUTH_ATTEMPTS, HASH_VERIFIER
 from androidapm_server.db.models import IngestKey, Tenant
 from androidapm_server.errors import ApiError
 
@@ -45,7 +46,7 @@ def generate_ingest_key() -> tuple[str, str, str]:
 
 def parse_bearer_token(authorization: str | None) -> tuple[str, str]:
     """Parse a strict Bearer credential and return its lookup id and secret."""
-    if authorization is None or not authorization.startswith("Bearer "):
+    if authorization is None or len(authorization) > 256 or not authorization.startswith("Bearer "):
         raise _invalid_credential()
     token = authorization.removeprefix("Bearer ")
     parts = token.split(KEY_SEPARATOR, maxsplit=2)
@@ -61,6 +62,7 @@ async def authenticate_ingest_key(
     environment: str,
 ) -> Principal:
     """Verify a stored ingest key and enforce its app/environment scope."""
+    AUTH_ATTEMPTS.consume()
     key_id, secret = parse_bearer_token(authorization)
     result = await session.execute(
         select(IngestKey, Tenant)
@@ -70,11 +72,11 @@ async def authenticate_ingest_key(
     row = result.one_or_none()
     if row is None:
         # A dummy verification narrows observable timing differences for unknown key ids.
-        _verify_dummy_secret(secret)
+        await _verify_dummy_secret(secret)
         raise _invalid_credential()
     ingest_key, tenant = row
     try:
-        PASSWORD_HASHER.verify(ingest_key.key_hash, secret)
+        await HASH_VERIFIER.verify(PASSWORD_HASHER.verify, ingest_key.key_hash, secret)
     except (InvalidHashError, VerificationError, VerifyMismatchError) as error:
         raise _invalid_credential() from error
 
@@ -105,10 +107,10 @@ async def authenticate_ingest_key(
     )
 
 
-def _verify_dummy_secret(secret: str) -> None:
+async def _verify_dummy_secret(secret: str) -> None:
     """Spend approximately one password verification for an unknown key id."""
     try:
-        PASSWORD_HASHER.verify(DUMMY_HASH, secret)
+        await HASH_VERIFIER.verify(PASSWORD_HASHER.verify, DUMMY_HASH, secret)
     except (InvalidHashError, VerificationError, VerifyMismatchError):
         pass
 

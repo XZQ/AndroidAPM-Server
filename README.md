@@ -1,5 +1,7 @@
 # AndroidAPM-Server
 
+Ingest/CI/Query key verification uses a shared, bounded two-thread Argon2 executor. A fixed-memory, per-process 20 attempts/second token bucket (burst 40) runs before key lookup. Saturation returns retryable `429 authentication_busy` with `Retry-After: 1`; cancellation does not release a running hash's memory slot. Unknown key IDs use the same executor for dummy verification.
+
 Query filters run in SQL before budgeting. SQL reduces repeated events into weighted occurrence buckets; `APM_QUERY_MAX_ROWS` bounds aggregate groups rather than raw events. Investigator pagination is independently page-bounded. Queries have a 5-second driver/PostgreSQL statement budget and never return partial aggregates; migration `20260907_0004` adds release/time and fingerprint/time indexes.
 
 Windows crossing installation HMAC key versions report `INSTALLATION_HMAC_CONTINUITY_BREAK` with null installation counts/ratios/deltas; event counts remain usable. Issue distributions and trends also preserve this gap. Replay verification still uses each row's original key version.

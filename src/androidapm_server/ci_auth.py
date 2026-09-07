@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from androidapm_server.auth import PASSWORD_HASHER
+from androidapm_server.auth_budget import AUTH_ATTEMPTS, HASH_VERIFIER
 from androidapm_server.db.models import CiKey, Tenant
 from androidapm_server.errors import ApiError
 
@@ -46,6 +47,7 @@ async def authenticate_ci_key(
     app_id: str,
 ) -> CiPrincipal:
     """Authenticate a CI key, then enforce tenant status, scope, and optional app scope."""
+    AUTH_ATTEMPTS.consume()
     key_id, secret = _parse_ci_bearer(authorization)
     result = await session.execute(
         select(CiKey, Tenant)
@@ -54,11 +56,11 @@ async def authenticate_ci_key(
     )
     row = result.one_or_none()
     if row is None:
-        _verify_dummy(secret)
+        await _verify_dummy(secret)
         raise _invalid_ci_credential()
     ci_key, tenant = row
     try:
-        PASSWORD_HASHER.verify(ci_key.key_hash, secret)
+        await HASH_VERIFIER.verify(PASSWORD_HASHER.verify, ci_key.key_hash, secret)
     except (InvalidHashError, VerificationError, VerifyMismatchError) as error:
         raise _invalid_ci_credential() from error
 
@@ -82,7 +84,7 @@ async def authenticate_ci_key(
 
 def _parse_ci_bearer(authorization: str | None) -> tuple[str, str]:
     """Parse the versioned CI Bearer key without accepting ingest-key prefixes."""
-    if authorization is None or not authorization.startswith("Bearer "):
+    if authorization is None or len(authorization) > 256 or not authorization.startswith("Bearer "):
         raise _invalid_ci_credential()
     parts = authorization.removeprefix("Bearer ").split(CI_KEY_SEPARATOR, maxsplit=2)
     if len(parts) != 3 or parts[0] != CI_KEY_PREFIX or not parts[1] or not parts[2]:
@@ -90,10 +92,10 @@ def _parse_ci_bearer(authorization: str | None) -> tuple[str, str]:
     return parts[1], parts[2]
 
 
-def _verify_dummy(secret: str) -> None:
+async def _verify_dummy(secret: str) -> None:
     """Narrow timing differences when an unknown CI key id is supplied."""
     try:
-        PASSWORD_HASHER.verify(CI_DUMMY_HASH, secret)
+        await HASH_VERIFIER.verify(PASSWORD_HASHER.verify, CI_DUMMY_HASH, secret)
     except (InvalidHashError, VerificationError, VerifyMismatchError):
         pass
 
