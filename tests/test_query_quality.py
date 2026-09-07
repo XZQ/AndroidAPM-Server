@@ -1,0 +1,100 @@
+"""Regress missing health and confidence gates with explicit synthetic occurrence facts."""
+
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from androidapm_server.db.query import QueryFact
+from androidapm_server.query import build_data_quality, build_release_health
+from androidapm_server.query_auth import QueryPrincipal
+
+PRINCIPAL = QueryPrincipal("tenant", "key", "app", "test", "viewer", None)
+NOW = datetime.now(UTC)
+TIME = int(NOW.timestamp() * 1000)
+
+
+def fact(**changes: object) -> QueryFact:
+    """Create a complete SDK sample from an occurrence-bound installation."""
+    base = QueryFact(
+        id=1,
+        event_id="sample",
+        app_version="new",
+        release_identity_quality="OCCURRENCE_BOUND",
+        installation_identity_quality="OCCURRENCE_BOUND",
+        installation_hmac="installation-a",
+        occurrence_timestamp_ms=TIME,
+        received_at=NOW,
+        incident_fingerprint=None,
+        schema_version="3",
+        protocol="protobuf",
+        inbox_status="pending",
+        module="core",
+        name="sdk_health",
+        scene=None,
+        sdk_emit_count=20,
+        sdk_drop_count=0,
+        sdk_drop_rate=0.0,
+    )
+    return replace(base, **changes)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"sdk_drop_rate": None},
+        {"sdk_drop_count": None},
+        {"sdk_emit_count": None},
+        {"sdk_emit_count": 0},
+        {"sdk_drop_rate": float("nan")},
+        {"sdk_drop_rate": -1},
+    ],
+)
+def test_missing_invalid_or_empty_health_cannot_be_zero(changes: dict[str, object]) -> None:
+    facts = [fact(**changes)]
+    result = build_release_health("r", PRINCIPAL, facts, "new", "old", TIME - 1, TIME + 1, 1000, 1)
+    quality = build_data_quality("r", PRINCIPAL, facts, "new", TIME - 1, TIME + 1, 1000)
+    assert result.new_release.metrics.sdk_drop_rate.state == "UNAVAILABLE"
+    assert result.new_release.metrics.sdk_drop_rate.value is None
+    assert result.new_release.metrics.affected_installation_ratio.value is None
+    assert quality.sdk_health.state == "UNAVAILABLE"
+    assert quality.sdk_health.value is None
+
+
+@pytest.mark.parametrize(
+    "case,reason",
+    [
+        ("missing", "SDK_HEALTH_NOT_PROVIDED"),
+        ("drops", "SDK_REPORTED_DROPS"),
+        ("late", "LATE_DATA_PRESENT"),
+        ("coverage", "SDK_HEALTH_INSTALLATION_COVERAGE_INCOMPLETE"),
+        ("sample", "INSUFFICIENT_INSTALLATION_SAMPLE"),
+    ],
+)
+def test_ratio_requires_all_quality_gates(case: str, reason: str) -> None:
+    facts = [fact()]
+    if case == "missing":
+        facts = [fact(module="crash", name="java_crash")]
+    elif case == "drops":
+        facts = [fact(sdk_drop_count=1, sdk_drop_rate=0.05)]
+    elif case == "late":
+        facts = [fact(received_at=NOW + timedelta(hours=1))]
+    elif case == "coverage":
+        facts.append(fact(id=2, module="crash", name="java_crash", installation_hmac="b"))
+    result = build_release_health(
+        "r", PRINCIPAL, facts, "new", "old", TIME - 1, TIME + 1, 1000, 2 if case == "sample" else 1
+    )
+    ratio = result.new_release.metrics.affected_installation_ratio
+    assert ratio.value is None
+    assert ratio.reason == reason
+    assert result.comparison.affected_installation_ratio_delta is None
+    assert result.new_release.metrics.java_crash_events.value is not None
+
+
+def test_complete_healthy_sample_can_report_real_zero() -> None:
+    result = build_release_health(
+        "r", PRINCIPAL, [fact()], "new", "old", TIME - 1, TIME + 1, 1000, 1
+    )
+    assert result.new_release.metrics.sdk_drop_rate.state == "ZERO"
+    assert result.new_release.metrics.affected_installation_ratio.state == "ZERO"
+    assert result.new_release.metrics.affected_installation_ratio.value == 0

@@ -36,6 +36,7 @@ class QueryFact:
     scene: str | None
     sdk_drop_count: int | None
     sdk_drop_rate: float | None
+    sdk_emit_count: int | None = None
 
 
 async def load_window_facts(
@@ -69,6 +70,7 @@ async def load_window_facts(
             scene_expression.label("scene"),
             registered["dropCount"].as_integer().label("sdk_drop_count"),
             registered["dropRate"].as_float().label("sdk_drop_rate"),
+            registered["emitCount"].as_integer().label("sdk_emit_count"),
         )
         .where(*_scope_window_predicates(principal, from_ms, to_ms))
         .order_by(InboxEvent.id)
@@ -212,6 +214,7 @@ def _fact_from_mapping(row: RowMapping) -> QueryFact:
         scene=cast(str | None, row["scene"]),
         sdk_drop_count=_optional_int(row["sdk_drop_count"]),
         sdk_drop_rate=_optional_float(row["sdk_drop_rate"]),
+        sdk_emit_count=_optional_int(row["sdk_emit_count"]),
     )
 
 

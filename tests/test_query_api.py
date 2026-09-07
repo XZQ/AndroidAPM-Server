@@ -140,7 +140,11 @@ async def test_release_health_uses_exact_occurrence_events_and_explicit_states(
     assert new_release["metrics"]["anrEvents"]["value"] == 1
     assert new_release["metrics"]["activeInstallations"]["value"] == 2
     assert new_release["metrics"]["affectedInstallations"]["value"] == 2
-    assert new_release["metrics"]["affectedInstallationRatio"]["value"] == 1.0
+    assert new_release["metrics"]["affectedInstallationRatio"]["value"] is None
+    assert (
+        new_release["metrics"]["affectedInstallationRatio"]["reason"]
+        == "RELEASE_IDENTITY_COVERAGE_INCOMPLETE"
+    )
     assert new_release["metrics"]["crashFreeSessions"] == {
         "state": "UNAVAILABLE",
         "value": None,
@@ -180,7 +184,7 @@ async def test_data_quality_and_fingerprints_distinguish_real_zero_and_missing_d
     quality_body = quality.json()
     assert quality_body["state"] == "DEGRADED"
     assert quality_body["releaseIdentity"]["coverage"] == pytest.approx(6 / 7)
-    assert quality_body["sdkHealth"]["state"] == "PRESENT"
+    assert quality_body["sdkHealth"]["state"] == "ZERO"
     assert quality_body["lateData"]["state"] == "ZERO"
 
     fingerprints = await client.get(
@@ -210,7 +214,7 @@ async def test_data_quality_and_fingerprints_distinguish_real_zero_and_missing_d
     )
     assert real_zero.status_code == 200, real_zero.text
     zero_slice = real_zero.json()["newRelease"]
-    assert zero_slice["state"] == "PRESENT"
+    assert zero_slice["state"] == "UNAVAILABLE"
     assert zero_slice["metrics"]["javaCrashEvents"]["state"] == "ZERO"
     assert zero_slice["metrics"]["javaCrashEvents"]["value"] == 0
 

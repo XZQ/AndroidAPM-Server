@@ -1,5 +1,7 @@
 # AndroidAPM-Server
 
+Release installation ratios require complete occurrence identity, valid SDK emission/drop samples, no reported loss or late events, at least `APM_QUERY_MIN_INSTALLATIONS=100` installations and `APM_QUERY_MIN_SDK_HEALTH_COVERAGE=1.0` installation health coverage. Missing quality returns an explicit state and null ratio; observed event counts remain available.
+
 Console evidence is bound to its route, session scope and filter snapshot. Changed queries discard prior evidence, late responses are ignored, and failed refreshes cannot retain an actionable release decision panel. Failed audited submissions preserve the entered reason.
 
 Installation privacy is applied before normalization and symbol-job preparation: registered attributes, nested raw values/keys, and native identities use minimized evidence. An installation value embedded in a required event/routing/release identifier rejects the whole batch with `422 privacy_identity_conflict`; identity is never silently rewritten.

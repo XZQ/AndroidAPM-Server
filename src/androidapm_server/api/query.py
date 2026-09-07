@@ -88,6 +88,8 @@ async def get_release_health(
         from_ms,
         to_ms,
         settings.query_late_after_seconds * 1_000,
+        settings.query_min_installations,
+        settings.query_min_sdk_health_coverage,
     )
 
 

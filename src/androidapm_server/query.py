@@ -373,10 +373,16 @@ def build_release_health(
     from_ms: int,
     to_ms: int,
     late_after_ms: int,
+    min_installations: int = 100,
+    min_sdk_health_coverage: float = 1.0,
 ) -> ReleaseHealthResponse:
     """Aggregate two explicit releases without silently choosing a baseline."""
-    new_slice = _release_slice(facts, new_release, to_ms, late_after_ms)
-    baseline_slice = _release_slice(facts, baseline_release, to_ms, late_after_ms)
+    new_slice = _release_slice(
+        facts, new_release, to_ms, late_after_ms, min_installations, min_sdk_health_coverage
+    )
+    baseline_slice = _release_slice(
+        facts, baseline_release, to_ms, late_after_ms, min_installations, min_sdk_health_coverage
+    )
     return ReleaseHealthResponse(
         request_id=request_id,
         scope=scope_for(principal),
@@ -481,8 +487,7 @@ def build_issue_detail(
     declared = [
         fact
         for fact in facts
-        if fact.incident_fingerprint == fingerprint
-        and (fact.module, fact.name) in INCIDENT_EVENTS
+        if fact.incident_fingerprint == fingerprint and (fact.module, fact.name) in INCIDENT_EVENTS
     ]
     eligible = [fact for fact in declared if _occurrence_bound(fact)]
     if not declared:
@@ -685,10 +690,6 @@ def build_data_quality(
         if (fact.sdk_drop_count is not None and fact.sdk_drop_count > 0)
         or (fact.sdk_drop_rate is not None and fact.sdk_drop_rate > 0)
     ]
-    max_drop_rate = max(
-        (fact.sdk_drop_rate for fact in sdk_facts if fact.sdk_drop_rate is not None),
-        default=None,
-    )
     late_count = sum(_is_late(fact, late_after_ms) for fact in selected)
     release_metric = _coverage_metric(
         occurrence_count,
@@ -707,22 +708,7 @@ def build_data_quality(
         late_metric = _metric(QUERY_STATE_NO_DATA, to_ms, 0)
         state = QUERY_STATE_NO_DATA
     else:
-        sdk_metric = (
-            _metric(
-                QUERY_STATE_DEGRADED if dropped else QUERY_STATE_PRESENT,
-                to_ms,
-                len(sdk_facts),
-                value=max_drop_rate,
-                reason="SDK_REPORTED_DROPS" if dropped else None,
-            )
-            if sdk_facts
-            else _metric(
-                QUERY_STATE_UNAVAILABLE,
-                to_ms,
-                sample_count,
-                reason=SDK_HEALTH_UNAVAILABLE_REASON,
-            )
-        )
+        sdk_metric = _sdk_health_metric(sdk_facts, to_ms)
         late_metric = _metric(
             QUERY_STATE_LATE if late_count else QUERY_STATE_ZERO,
             to_ms,
@@ -737,7 +723,7 @@ def build_data_quality(
             state = QUERY_STATE_DEGRADED
         elif late_count:
             state = QUERY_STATE_LATE
-        elif not sdk_facts:
+        elif sdk_metric.state == QUERY_STATE_UNAVAILABLE:
             state = QUERY_STATE_UNAVAILABLE
         else:
             state = QUERY_STATE_PRESENT
@@ -914,6 +900,8 @@ def _release_slice(
     release_version: str,
     as_of_ms: int,
     late_after_ms: int,
+    min_installations: int,
+    min_sdk_health_coverage: float,
 ) -> ReleaseSlice:
     """Build quality-gated metrics for one explicit release value."""
     declared = [fact for fact in facts if fact.app_version == release_version]
@@ -1068,34 +1056,40 @@ def _release_slice(
             denominator=len(eligible),
         )
     )
+    sdk_metric = _sdk_health_metric(sdk_facts, as_of_ms)
     if not declared:
         sdk_metric = _metric(QUERY_STATE_NO_DATA, as_of_ms, 0)
-    elif not eligible:
-        sdk_metric = _metric(
-            QUERY_STATE_UNAVAILABLE,
-            as_of_ms,
-            len(declared),
-            reason=OCCURRENCE_UNAVAILABLE_REASON,
-        )
-    elif not sdk_facts:
-        sdk_metric = _metric(
-            QUERY_STATE_UNAVAILABLE,
+    valid_sdk_installations = {
+        fact.installation_hmac
+        for fact in sdk_facts
+        if _valid_sdk_health(fact) and fact.installation_hmac is not None
+    }
+    sdk_coverage = (
+        len(valid_sdk_installations) / len(active_installations) if active_installations else None
+    )
+    sdk_metric.coverage = sdk_coverage
+    gate_state, gate_reason = quality_state, quality_reason
+    if gate_state == QUERY_STATE_PRESENT:
+        if sdk_metric.state not in {QUERY_STATE_PRESENT, QUERY_STATE_ZERO}:
+            gate_state, gate_reason = sdk_metric.state, sdk_metric.reason
+        elif sdk_coverage is None or sdk_coverage < min_sdk_health_coverage:
+            gate_state, gate_reason = (
+                QUERY_STATE_UNKNOWN_COVERAGE,
+                "SDK_HEALTH_INSTALLATION_COVERAGE_INCOMPLETE",
+            )
+        elif len(active_installations) < min_installations:
+            gate_state, gate_reason = QUERY_STATE_UNAVAILABLE, "INSUFFICIENT_INSTALLATION_SAMPLE"
+    if gate_state != QUERY_STATE_PRESENT and eligible:
+        ratio_metric = _metric(
+            gate_state,
             as_of_ms,
             len(eligible),
-            reason=SDK_HEALTH_UNAVAILABLE_REASON,
+            numerator=len(affected_installations),
+            denominator=len(active_installations),
+            coverage=installation_coverage,
+            reason=gate_reason,
         )
-    else:
-        max_drop_rate = max(
-            (fact.sdk_drop_rate for fact in sdk_facts if fact.sdk_drop_rate is not None),
-            default=0.0,
-        )
-        sdk_metric = _metric(
-            QUERY_STATE_DEGRADED if dropped else QUERY_STATE_ZERO,
-            as_of_ms,
-            len(sdk_facts),
-            value=max_drop_rate,
-            reason="SDK_REPORTED_DROPS" if dropped else None,
-        )
+        quality_state = gate_state
     session_metric = _metric(
         QUERY_STATE_UNAVAILABLE,
         as_of_ms,
@@ -1122,6 +1116,39 @@ def _release_slice(
             crash_free_sessions=session_metric.model_copy(),
             anr_free_sessions=session_metric.model_copy(),
         ),
+    )
+
+
+def _valid_sdk_health(fact: QueryFact) -> bool:
+    """Require reported, valid fields and a non-empty emission sample for a real zero."""
+    return (
+        fact.sdk_emit_count is not None
+        and fact.sdk_emit_count > 0
+        and fact.sdk_drop_count is not None
+        and fact.sdk_drop_count >= 0
+        and fact.sdk_drop_rate is not None
+        and 0 <= fact.sdk_drop_rate <= 1
+    )
+
+
+def _sdk_health_metric(facts: list[QueryFact], as_of_ms: int) -> MetricResult:
+    """Never convert absent/invalid SDK counters or denominators into zero loss."""
+    if not facts:
+        return _metric(QUERY_STATE_UNAVAILABLE, as_of_ms, 0, reason=SDK_HEALTH_UNAVAILABLE_REASON)
+    if not all(_valid_sdk_health(fact) for fact in facts):
+        return _metric(
+            QUERY_STATE_UNAVAILABLE,
+            as_of_ms,
+            len(facts),
+            reason="SDK_HEALTH_FIELDS_OR_SAMPLE_INVALID",
+        )
+    dropped = any((fact.sdk_drop_count or 0) > 0 or (fact.sdk_drop_rate or 0) > 0 for fact in facts)
+    return _metric(
+        QUERY_STATE_DEGRADED if dropped else QUERY_STATE_ZERO,
+        as_of_ms,
+        len(facts),
+        value=max(fact.sdk_drop_rate for fact in facts if fact.sdk_drop_rate is not None),
+        reason="SDK_REPORTED_DROPS" if dropped else None,
     )
 
 
@@ -1231,6 +1258,11 @@ def _metric_delta(new: MetricResult, baseline: MetricResult) -> int | None:
 
 def _ratio_delta(new: MetricResult, baseline: MetricResult) -> float | None:
     """Return a ratio delta only when both gated ratios are available."""
+    if new.state not in {QUERY_STATE_PRESENT, QUERY_STATE_ZERO} or baseline.state not in {
+        QUERY_STATE_PRESENT,
+        QUERY_STATE_ZERO,
+    }:
+        return None
     if new.value is None or baseline.value is None:
         return None
     if isinstance(new.value, bool) or isinstance(baseline.value, bool):

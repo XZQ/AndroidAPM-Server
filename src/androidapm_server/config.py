@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     query_max_rows: int = Field(default=10_000, ge=100, le=100_000)
     query_max_limit: int = Field(default=100, ge=1, le=1_000)
     query_late_after_seconds: int = Field(default=900, ge=60, le=86_400)
+    query_min_installations: int = Field(default=100, ge=1, le=100_000)
+    query_min_sdk_health_coverage: float = Field(default=1.0, gt=0, le=1)
     query_cursor_hmac_key_b64: SecretStr = SecretStr("")
     web_dist_path: Path = Path("web/dist")
     web_session_hmac_key_b64: SecretStr = SecretStr("")
