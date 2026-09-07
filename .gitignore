@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.tsbuildinfo
 .coverage
 htmlcov/
 
@@ -13,6 +14,7 @@ htmlcov/
 .env
 .env.*
 !.env.example
+!.env.production.example
 
 # IDE and OS
 .idea/
@@ -26,3 +28,4 @@ dist/
 build/
 artifacts/
 tmp/
+.local/

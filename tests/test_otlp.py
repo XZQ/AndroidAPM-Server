@@ -27,14 +27,20 @@ def inbox_event() -> InboxEvent:
         app_build="123",
         protocol="protobuf",
         event_timestamp_ms=1_700_000_000_000,
+        occurrence_timestamp_ms=1_700_000_000_000,
+        release_identity_quality="OCCURRENCE_BOUND",
+        installation_identity_quality="OCCURRENCE_BOUND",
+        installation_hmac="a" * 64,
+        installation_hmac_key_version="v1",
+        normalized_json={"indexed_attributes": {"dropRate": 0.125}},
         payload_sha256="0" * 64,
         request_id="request-1",
         received_at=datetime(2026, 7, 16, tzinfo=UTC),
         payload_json={
             "timestamp": 1_700_000_000_000,
             "event_id": "event-1",
-            "module": "network",
-            "name": "request",
+            "module": "core",
+            "name": "sdk_health",
             "kind": "METRIC",
             "severity": "INFO",
             "priority": "NORMAL",
@@ -42,7 +48,7 @@ def inbox_event() -> InboxEvent:
             "thread_name": "main",
             "scene": "home",
             "foreground": True,
-            "fields": {"durationMs": "42"},
+            "fields": {"dropRate": "0.125", "stackTrace": "sensitive"},
             "global_context": {"session": "session-1"},
             "extras": {},
         },
@@ -53,7 +59,7 @@ def attributes(values: object) -> dict[str, object]:
     return {item.key: item.value for item in values}  # type: ignore[attr-defined]
 
 
-def test_maps_stable_identity_and_android_context_to_otlp_logs() -> None:
+def test_maps_only_source_reviewed_identity_and_fields_to_otlp_logs() -> None:
     serialized = build_logs_request([inbox_event()]).SerializeToString()
     parsed = ExportLogsServiceRequest.FromString(serialized)
     resource_logs = parsed.resource_logs[0]
@@ -64,8 +70,11 @@ def test_maps_stable_identity_and_android_context_to_otlp_logs() -> None:
     assert resource["service.name"].string_value == "com.example"  # type: ignore[union-attr]
     assert resource["deployment.environment.name"].string_value == "production"  # type: ignore[union-attr]
     assert attrs["android.apm.event_id"].string_value == "event-1"  # type: ignore[union-attr]
-    assert attrs["android.apm.field.durationMs"].double_value == 42  # type: ignore[union-attr]
-    assert record.body.string_value == "network.request"
+    assert attrs["android.apm.field.dropRate"].double_value == 0.125  # type: ignore[union-attr]
+    assert attrs["android.apm.installation.hmac"].string_value == "a" * 64  # type: ignore[union-attr]
+    assert "android.apm.context.session" not in attrs
+    assert "android.apm.field.stackTrace" not in attrs
+    assert record.body.string_value == "core.sdk_health"
     assert record.time_unix_nano == 1_700_000_000_000_000_000
 
 

@@ -25,7 +25,7 @@
             "name": "A",
             "signal": "logs",
             "aggregations": [{ "expression": "count()" }],
-            "filter": { "expression": "android.apm.module = 'crash'" }
+            "filter": { "expression": "android.apm.module = 'crash' AND android.apm.name = 'java_crash' AND android.apm.release_identity_quality = 'OCCURRENCE_BOUND'" }
           }
         }
       ]
@@ -36,10 +36,10 @@
     "kind": "rolling",
     "spec": { "evalWindow": "5m0s", "frequency": "1m0s" }
   },
-  "labels": { "component": "androidapm", "severity": "critical" },
+  "labels": { "component": "androidapm", "severity": "critical", "production_ready": "false" },
   "annotations": {
-    "summary": "AndroidAPM observed one or more crash events",
-    "description": "Crash count in the evaluation window is {{$value}}. Filter by app, environment and version before routing this template in production."
+    "summary": "AndroidAPM observed one or more occurrence-bound Java crash events",
+    "description": "Exact crash/java_crash count is {{$value}}. This template has no active channel and must remain unrouted until app/environment/version scope, minimum sample, installation identity coverage, SDK-drop/late-data gates, trigger and recovery are verified in staging."
   },
   "notificationSettings": {
     "groupBy": ["service.name", "deployment.environment.name"],

@@ -22,6 +22,30 @@ def test_checked_in_signoz_assets_have_current_schema_and_stable_names() -> None
     json.dumps(dashboards + alerts)
 
 
+def test_checked_in_assets_use_exact_runtime_events_and_stay_unrouted() -> None:
+    dashboards = load_assets(ROOT / "deploy" / "signoz" / "dashboards")
+    alerts = load_assets(ROOT / "deploy" / "signoz" / "alerts")
+    rendered_dashboards = json.dumps(dashboards, sort_keys=True)
+    rendered_alerts = json.dumps(alerts, sort_keys=True)
+    assert "sdk_health_report" not in rendered_dashboards + rendered_alerts
+    assert "android.apm.module = 'core' AND android.apm.name = 'sdk_health'" in (
+        rendered_dashboards
+    )
+    assert "android.apm.module = 'crash' AND android.apm.name = 'java_crash'" in (
+        rendered_dashboards
+    )
+    assert "android.apm.module = 'anr' AND android.apm.name = 'anr_detected'" in (
+        rendered_dashboards
+    )
+    assert "android.apm.release_identity_quality = 'OCCURRENCE_BOUND'" in rendered_alerts
+    assert {alert["labels"]["production_ready"] for alert in alerts} == {"false"}
+    assert all(
+        threshold["channels"] == []
+        for alert in alerts
+        for threshold in alert["condition"]["thresholds"]["spec"]
+    )
+
+
 def test_finds_named_id_inside_api_envelopes() -> None:
     envelope = {"status": "success", "data": {"items": [{"id": "123", "name": "target"}]}}
     assert find_named_id(envelope, "name", "target") == "123"

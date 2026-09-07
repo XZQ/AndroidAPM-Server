@@ -7,7 +7,7 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class ApmEventMessage(_message.Message):
-    __slots__ = ("timestamp", "module", "name", "kind", "severity", "process_name", "thread_name", "scene", "foreground", "fields", "global_context", "extras", "priority", "event_id", "typed_fields")
+    __slots__ = ("timestamp", "module", "name", "kind", "severity", "process_name", "thread_name", "scene", "foreground", "fields", "global_context", "extras", "priority", "event_id", "typed_fields", "occurrence")
     class FieldsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -51,6 +51,7 @@ class ApmEventMessage(_message.Message):
     PRIORITY_FIELD_NUMBER: _ClassVar[int]
     EVENT_ID_FIELD_NUMBER: _ClassVar[int]
     TYPED_FIELDS_FIELD_NUMBER: _ClassVar[int]
+    OCCURRENCE_FIELD_NUMBER: _ClassVar[int]
     timestamp: int
     module: str
     name: str
@@ -66,7 +67,8 @@ class ApmEventMessage(_message.Message):
     priority: str
     event_id: str
     typed_fields: _containers.MessageMap[str, ApmTypedValue]
-    def __init__(self, timestamp: _Optional[int] = ..., module: _Optional[str] = ..., name: _Optional[str] = ..., kind: _Optional[str] = ..., severity: _Optional[str] = ..., process_name: _Optional[str] = ..., thread_name: _Optional[str] = ..., scene: _Optional[str] = ..., foreground: _Optional[bool] = ..., fields: _Optional[_Mapping[str, str]] = ..., global_context: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Mapping[str, str]] = ..., priority: _Optional[str] = ..., event_id: _Optional[str] = ..., typed_fields: _Optional[_Mapping[str, ApmTypedValue]] = ...) -> None: ...
+    occurrence: ApmOccurrenceContext
+    def __init__(self, timestamp: _Optional[int] = ..., module: _Optional[str] = ..., name: _Optional[str] = ..., kind: _Optional[str] = ..., severity: _Optional[str] = ..., process_name: _Optional[str] = ..., thread_name: _Optional[str] = ..., scene: _Optional[str] = ..., foreground: _Optional[bool] = ..., fields: _Optional[_Mapping[str, str]] = ..., global_context: _Optional[_Mapping[str, str]] = ..., extras: _Optional[_Mapping[str, str]] = ..., priority: _Optional[str] = ..., event_id: _Optional[str] = ..., typed_fields: _Optional[_Mapping[str, ApmTypedValue]] = ..., occurrence: _Optional[_Union[ApmOccurrenceContext, _Mapping]] = ...) -> None: ...
 
 class ApmTypedValue(_message.Message):
     __slots__ = ("type", "value")
@@ -87,6 +89,36 @@ class ApmResource(_message.Message):
     deployment_environment: str
     installation_id: str
     def __init__(self, service_name: _Optional[str] = ..., service_version: _Optional[str] = ..., deployment_environment: _Optional[str] = ..., installation_id: _Optional[str] = ...) -> None: ...
+
+class ApmOccurrenceContext(_message.Message):
+    __slots__ = ("service_version", "version_code", "app_build", "variant", "installation_id", "native_frames")
+    SERVICE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    VERSION_CODE_FIELD_NUMBER: _ClassVar[int]
+    APP_BUILD_FIELD_NUMBER: _ClassVar[int]
+    VARIANT_FIELD_NUMBER: _ClassVar[int]
+    INSTALLATION_ID_FIELD_NUMBER: _ClassVar[int]
+    NATIVE_FRAMES_FIELD_NUMBER: _ClassVar[int]
+    service_version: str
+    version_code: str
+    app_build: str
+    variant: str
+    installation_id: str
+    native_frames: _containers.RepeatedCompositeFieldContainer[ApmNativeFrameIdentity]
+    def __init__(self, service_version: _Optional[str] = ..., version_code: _Optional[str] = ..., app_build: _Optional[str] = ..., variant: _Optional[str] = ..., installation_id: _Optional[str] = ..., native_frames: _Optional[_Iterable[_Union[ApmNativeFrameIdentity, _Mapping]]] = ...) -> None: ...
+
+class ApmNativeFrameIdentity(_message.Message):
+    __slots__ = ("abi", "module_build_id", "module_name", "module_relative_pc", "load_bias")
+    ABI_FIELD_NUMBER: _ClassVar[int]
+    MODULE_BUILD_ID_FIELD_NUMBER: _ClassVar[int]
+    MODULE_NAME_FIELD_NUMBER: _ClassVar[int]
+    MODULE_RELATIVE_PC_FIELD_NUMBER: _ClassVar[int]
+    LOAD_BIAS_FIELD_NUMBER: _ClassVar[int]
+    abi: str
+    module_build_id: str
+    module_name: str
+    module_relative_pc: int
+    load_bias: int
+    def __init__(self, abi: _Optional[str] = ..., module_build_id: _Optional[str] = ..., module_name: _Optional[str] = ..., module_relative_pc: _Optional[int] = ..., load_bias: _Optional[int] = ...) -> None: ...
 
 class ApmBatchEnvelope(_message.Message):
     __slots__ = ("schema_version", "sdk_name", "sdk_version", "batch_id", "sent_at_ms", "resource", "events")

@@ -26,6 +26,7 @@ message ApmEventMessage {
   string priority = 13;
   string event_id = 14;
   map<string, ApmTypedValue> typed_fields = 15;
+  ApmOccurrenceContext occurrence = 16;
 }
 
 message ApmTypedValue {
@@ -38,6 +39,23 @@ message ApmResource {
   string service_version = 2;
   string deployment_environment = 3;
   string installation_id = 4;
+}
+
+message ApmOccurrenceContext {
+  string service_version = 1;
+  string version_code = 2;
+  string app_build = 3;
+  string variant = 4;
+  string installation_id = 5;
+  repeated ApmNativeFrameIdentity native_frames = 6;
+}
+
+message ApmNativeFrameIdentity {
+  string abi = 1;
+  string module_build_id = 2;
+  string module_name = 3;
+  uint64 module_relative_pc = 4;
+  optional uint64 load_bias = 5;
 }
 
 message ApmBatchEnvelope {

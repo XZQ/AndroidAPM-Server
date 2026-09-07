@@ -5,7 +5,7 @@
   "spec": {
     "display": {
       "name": "AndroidAPM Overview",
-      "description": "Android client health, crashes, ANRs, startup and recent high-severity events"
+      "description": "Internal staging counts only. Use the scoped Query/BFF for occurrence identity, sample, installation coverage and release decisions; empty panels are not zero."
     },
     "duration": "6h",
     "datasources": {
@@ -77,7 +77,7 @@
       "crash-count": {
         "kind": "Panel",
         "spec": {
-          "display": { "name": "Crashes", "description": "Java and Native crash events" },
+          "display": { "name": "Java crashes", "description": "Exact crash/java_crash count; app_exit is excluded. Validate occurrence identity and sample coverage in Query/BFF before release use." },
           "plugin": {
             "kind": "signoz/NumberPanel",
             "spec": {
@@ -95,7 +95,7 @@
                     "name": "A",
                     "signal": "logs",
                     "aggregations": [{ "expression": "count()" }],
-                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment AND android.apm.module = 'crash'" }
+                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment AND android.apm.module = 'crash' AND android.apm.name = 'java_crash'" }
                   }
                 }
               }
@@ -106,7 +106,7 @@
       "anr-count": {
         "kind": "Panel",
         "spec": {
-          "display": { "name": "ANRs", "description": "Application-not-responding events" },
+          "display": { "name": "ANRs", "description": "Exact anr/anr_detected count. Validate occurrence identity and sample coverage in Query/BFF before release use." },
           "plugin": {
             "kind": "signoz/NumberPanel",
             "spec": {
@@ -124,7 +124,7 @@
                     "name": "A",
                     "signal": "logs",
                     "aggregations": [{ "expression": "count()" }],
-                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment AND android.apm.module = 'anr'" }
+                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment AND android.apm.module = 'anr' AND android.apm.name = 'anr_detected'" }
                   }
                 }
               }
@@ -135,7 +135,7 @@
       "sdk-drop-rate": {
         "kind": "Panel",
         "spec": {
-          "display": { "name": "SDK drop rate", "description": "P95 client-side telemetry drop ratio" },
+          "display": { "name": "SDK drop rate", "description": "P95 dropRate from exact core/sdk_health events; require a non-empty sample before interpreting zero." },
           "plugin": {
             "kind": "signoz/TimeSeriesPanel",
             "spec": { "formatting": { "unit": "percentunit", "decimalPrecision": "2" } }
@@ -150,7 +150,7 @@
                     "name": "A",
                     "signal": "logs",
                     "aggregations": [{ "expression": "p95(android.apm.field.dropRate)" }],
-                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment AND android.apm.name = 'sdk_health_report'" },
+                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment AND android.apm.module = 'core' AND android.apm.name = 'sdk_health'" },
                     "groupBy": [{ "name": "service.version", "fieldDataType": "string", "fieldContext": "resource" }]
                   }
                 }

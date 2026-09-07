@@ -32,6 +32,7 @@ async def session() -> AsyncIterator[AsyncSession]:
                 sdk_version="0.1",
                 protocol="line",
                 event_timestamp_ms=1_700_000_000_000,
+                occurrence_timestamp_ms=1_700_000_000_000,
                 payload_json={},
                 payload_sha256="0" * 64,
                 request_id="request",

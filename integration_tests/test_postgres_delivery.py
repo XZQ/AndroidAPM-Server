@@ -2,23 +2,44 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from androidapm_server.artifacts import ArtifactIdentity, StagedArtifact, inspect_native_elf
+from androidapm_server.constants import ARTIFACT_TYPE_JAVA_MAPPING
+from androidapm_server.db.artifacts import register_artifact
 from androidapm_server.db.inbox import insert_batch
-from androidapm_server.db.models import InboxEvent
+from androidapm_server.db.models import InboxEvent, SymbolArtifact, Tenant
 from androidapm_server.db.worker import claim_batch
 from androidapm_server.domain import ApmEvent, IngestMetadata
 from androidapm_server.errors import ApiError
 
 POSTGRES_URL = os.environ.get("APM_TEST_POSTGRES_URL")
 pytestmark = pytest.mark.skipif(not POSTGRES_URL, reason="APM_TEST_POSTGRES_URL is required")
+
+
+@pytest.mark.asyncio
+async def test_linux_toolchain_fixture_has_verified_unstripped_elf_identity(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "native-fixture"
+    await asyncio.to_thread(
+        subprocess.run,
+        ["/usr/bin/cc", "-g", "-Wl,--build-id=sha1", "-x", "c", "-", "-o", str(output)],
+        input=b"int sample(void) { return 42; } int main(void) { return sample(); }",
+        check=True,
+    )
+    identity = await inspect_native_elf(output)
+    assert identity.abi == "x86_64"
+    assert len(identity.build_id) == 40
 
 
 @pytest_asyncio.fixture
@@ -54,6 +75,51 @@ def metadata(tenant_id: str, request_id: str) -> IngestMetadata:
         sdk_version="test",
         protocol="protobuf",
     )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_artifact_identity_has_one_fact_and_detects_conflict(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    tenant_id = f"integration-{uuid.uuid4().hex}"
+    async with factory() as session:
+        session.add(Tenant(id=tenant_id, name="Integration"))
+        await session.commit()
+    identity = ArtifactIdentity(
+        ARTIFACT_TYPE_JAVA_MAPPING,
+        tenant_id,
+        "integration.test",
+        "42",
+        "build-1",
+        "release",
+    )
+
+    async def submit(checksum: str) -> tuple[bool, bool]:
+        async with factory() as session:
+            registration = await register_artifact(
+                session,
+                identity,
+                StagedArtifact(Path("unused"), checksum, 100),
+                identity.storage_key(checksum, "txt"),
+                "integration-ci",
+            )
+            await session.commit()
+            return registration.inserted, registration.conflict
+
+    same = await asyncio.gather(submit("a" * 64), submit("a" * 64))
+    assert sorted(same) == [(False, False), (True, False)]
+    conflict = await submit("b" * 64)
+    assert conflict == (False, True)
+    async with factory() as session:
+        count = await session.scalar(
+            select(func.count()).select_from(SymbolArtifact).where(
+                SymbolArtifact.tenant_id == tenant_id
+            )
+        )
+        await session.execute(delete(SymbolArtifact).where(SymbolArtifact.tenant_id == tenant_id))
+        await session.execute(delete(Tenant).where(Tenant.id == tenant_id))
+        await session.commit()
+    assert count == 1
 
 
 @pytest.mark.asyncio

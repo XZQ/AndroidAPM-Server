@@ -1,4 +1,15 @@
 # syntax=docker/dockerfile:1.7
+FROM node:24.15.0-bookworm-slim AS web-builder
+
+WORKDIR /web
+RUN corepack enable && corepack prepare pnpm@11.19.0 --activate
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY web/index.html web/tsconfig.json web/tsconfig.app.json web/tsconfig.node.json ./
+COPY web/vite.config.ts web/eslint.config.js ./
+COPY web/src ./src
+RUN pnpm run build
+
 FROM ghcr.io/astral-sh/uv:0.11.28 AS uv
 
 FROM python:3.11.15-slim-bookworm AS runtime
@@ -23,6 +34,7 @@ COPY alembic ./alembic
 COPY proto ./proto
 COPY scripts ./scripts
 COPY src ./src
+COPY --from=web-builder /web/dist ./web/dist
 RUN uv sync --frozen --no-dev
 
 USER 10001:10001

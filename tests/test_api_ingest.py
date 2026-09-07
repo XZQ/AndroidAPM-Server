@@ -18,6 +18,7 @@ from androidapm_server.db.session import get_session
 from androidapm_server.generated.apm_event_pb2 import ApmBatchEnvelope
 from androidapm_server.main import create_app
 from androidapm_server.protocol.envelope_v2 import stable_batch_id
+from androidapm_server.protocol.envelope_v3 import stable_batch_id_v3
 from androidapm_server.remote_config import (
     generate_signing_keypair,
     sign_config,
@@ -28,6 +29,7 @@ LINE = (
     "ts=1700000000000|eventId=api-event-1|module=network|name=request|kind=METRIC|"
     "severity=INFO|priority=NORMAL|process=com.example|thread=main|fields=durationMs=42"
 )
+TEST_HMAC_KEYS_JSON = '{"v1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}'
 
 
 @pytest_asyncio.fixture
@@ -59,6 +61,7 @@ async def api() -> AsyncIterator[tuple[AsyncClient, async_sessionmaker[AsyncSess
     app.dependency_overrides[get_settings] = lambda: Settings(
         database_url="sqlite+aiosqlite:///:memory:",
         environment="test",
+        installation_hmac_keys_json=TEST_HMAC_KEYS_JSON,
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client, factory, plaintext
@@ -110,10 +113,59 @@ def v2_request(
     return (
         {
             "Authorization": f"Bearer {key}",
-            "Content-Type": (
-                "application/x-protobuf; message=ApmBatchEnvelope; version=2"
-            ),
+            "Content-Type": ("application/x-protobuf; message=ApmBatchEnvelope; version=2"),
             "X-Apm-Schema-Version": "2",
+            "X-Apm-Sdk-Version": "0.1.0",
+            "X-Apm-App-Id": "com.example",
+            "X-Apm-Environment": "test",
+            "X-Apm-Batch-Id": batch_id,
+            "X-Apm-Event-Count": "1",
+        },
+        envelope.SerializeToString(),
+    )
+
+
+def v3_request(
+    key: str,
+    event_id: str = "api-v3-event-1",
+    *,
+    occurrence_version: str = "1.9.0",
+) -> tuple[dict[str, str], bytes]:
+    """Build a complete occurrence-bound V3 request from the generated schema."""
+    batch_id = stable_batch_id_v3([event_id])
+    envelope = ApmBatchEnvelope(
+        schema_version=3,
+        sdk_name="android-apm",
+        sdk_version="0.1.0",
+        batch_id=batch_id,
+        sent_at_ms=1_700_000_000_100,
+    )
+    envelope.resource.service_name = "com.example"
+    envelope.resource.service_version = "2.0.0"
+    envelope.resource.deployment_environment = "test"
+    event = envelope.events.add(
+        timestamp=1_700_000_000_000,
+        event_id=event_id,
+        module="crash",
+        name="java_crash",
+        kind="ALERT",
+        severity="FATAL",
+        priority="CRITICAL",
+        process_name="com.example",
+        thread_name="main",
+    )
+    event.typed_fields["stackTrace"].type = "STRING"
+    event.typed_fields["stackTrace"].value = "at a.a(SourceFile:1)"
+    event.occurrence.service_version = occurrence_version
+    event.occurrence.version_code = "19"
+    event.occurrence.app_build = "build-19"
+    event.occurrence.variant = "release"
+    event.occurrence.installation_id = "v3-anonymous-installation"
+    return (
+        {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": ("application/x-protobuf; message=ApmBatchEnvelope; version=3"),
+            "X-Apm-Schema-Version": "3",
             "X-Apm-Sdk-Version": "0.1.0",
             "X-Apm-App-Id": "com.example",
             "X-Apm-Environment": "test",
@@ -168,10 +220,65 @@ async def test_v2_returns_exact_ack_headers_and_replay_is_duplicate(
         assert rows[0].app_version == "2.4.1"
         assert rows[0].payload_json["fields"]["durationMs"] == 42.5
         assert rows[0].payload_json["field_types"]["durationMs"] == "DOUBLE"
-        assert (
-            rows[0].payload_json["unknown"]["resource.installationId"]
-            == "anonymous-installation"
-        )
+        assert "anonymous-installation" not in str(rows[0].payload_json)
+        assert rows[0].installation_hmac is not None
+        assert rows[0].installation_hmac_key_version == "v1"
+        assert rows[0].release_identity_quality == "BATCH_DECLARED"
+
+
+@pytest.mark.asyncio
+async def test_v3_returns_exact_ack_and_persists_only_occurrence_pseudonym(
+    api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str],
+) -> None:
+    client, factory, key = api
+    request_headers, body = v3_request(key)
+    first = await client.post("/v1/events", headers=request_headers, content=body)
+    replay = await client.post("/v1/events", headers=request_headers, content=body)
+
+    assert first.status_code == 200
+    assert first.headers["X-Apm-Schema-Version"] == "3"
+    assert first.headers["X-Apm-Batch-Id"] == request_headers["X-Apm-Batch-Id"]
+    assert first.headers["X-Apm-Event-Count"] == "1"
+    assert replay.status_code == 200
+    assert replay.json()["duplicates"] == 1
+    async with factory() as session:
+        row = await session.scalar(select(InboxEvent))
+        assert row is not None
+        assert row.protocol == "protobuf_envelope_v3"
+        assert row.app_version == "1.9.0"
+        assert row.app_build == "build-19"
+        assert row.version_code == "19"
+        assert row.release_identity_quality == "OCCURRENCE_BOUND"
+        assert row.installation_identity_quality == "OCCURRENCE_BOUND"
+        assert row.installation_hmac is not None
+        assert row.installation_hmac_key_version == "v1"
+        assert "v3-anonymous-installation" not in str(row.payload_json)
+
+
+@pytest.mark.asyncio
+async def test_v3_replay_with_changed_occurrence_identity_is_a_conflict(
+    api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str],
+) -> None:
+    client, factory, key = api
+    request_headers, body = v3_request(key, event_id="v3-conflict")
+    accepted = await client.post("/v1/events", headers=request_headers, content=body)
+    changed_headers, changed_body = v3_request(
+        key,
+        event_id="v3-conflict",
+        occurrence_version="2.0.0",
+    )
+    conflict = await client.post(
+        "/v1/events",
+        headers=changed_headers,
+        content=changed_body,
+    )
+
+    assert accepted.status_code == 200
+    assert conflict.status_code == 409
+    assert conflict.json()["code"] == "event_id_conflict"
+    async with factory() as session:
+        row = await session.scalar(select(InboxEvent))
+        assert row is not None and row.app_version == "1.9.0"
 
 
 @pytest.mark.asyncio

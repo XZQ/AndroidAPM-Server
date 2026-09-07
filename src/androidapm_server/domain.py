@@ -45,6 +45,88 @@ class EventPriority(StrEnum):
     CRITICAL = "CRITICAL"
 
 
+class IdentityQuality(StrEnum):
+    """Provenance quality persisted with every identity-bearing fact."""
+
+    AUTHENTICATED = "AUTHENTICATED"
+    OCCURRENCE_BOUND = "OCCURRENCE_BOUND"
+    BATCH_DECLARED = "BATCH_DECLARED"
+    REQUEST_DECLARED = "REQUEST_DECLARED"
+    HOST_CONTEXT = "HOST_CONTEXT"
+    ABSENT = "ABSENT"
+    INVALID = "INVALID"
+
+
+class NativeFrameIdentity(BaseModel):
+    """Build-relative native frame identity suitable for exact symbol lookup."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    abi: str
+    module_build_id: str
+    module_name: str
+    module_relative_pc: int = Field(ge=0)
+    load_bias: int | None = Field(default=None, ge=0)
+
+    @field_validator("abi", "module_build_id", "module_name")
+    @classmethod
+    def validate_identity(cls, value: str) -> str:
+        """Require a non-empty bounded native build identifier."""
+        if not value or value != value.strip() or len(value.encode("utf-8")) > MAX_IDENTIFIER_BYTES:
+            raise ValueError("native frame identity must contain 1-256 trimmed UTF-8 bytes")
+        return value
+
+
+class OccurrenceContext(BaseModel):
+    """Release/build/installation snapshot frozen into one durable Android event."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    service_version: str
+    version_code: str
+    app_build: str
+    variant: str
+    installation_id: str = Field(repr=False)
+    native_frames: tuple[NativeFrameIdentity, ...] = ()
+
+    @field_validator(
+        "service_version",
+        "app_build",
+        "variant",
+        "installation_id",
+    )
+    @classmethod
+    def validate_occurrence_identity(cls, value: str) -> str:
+        """Require complete, trimmed, bounded occurrence identity values."""
+        if not value or value != value.strip() or len(value.encode("utf-8")) > MAX_IDENTIFIER_BYTES:
+            raise ValueError("occurrence identity must contain 1-256 trimmed UTF-8 bytes")
+        return value
+
+    @field_validator("version_code")
+    @classmethod
+    def validate_version_code(cls, value: str) -> str:
+        """Require the canonical unsigned decimal versionCode emitted by V3 clients."""
+        if (
+            not value
+            or not value.isascii()
+            or not value.isdecimal()
+            or (len(value) > 1 and value.startswith("0"))
+            or len(value.encode("utf-8")) > 64
+        ):
+            raise ValueError("versionCode must use canonical unsigned decimal text")
+        return value
+
+    @field_validator("native_frames")
+    @classmethod
+    def validate_native_frame_count(
+        cls, value: tuple[NativeFrameIdentity, ...]
+    ) -> tuple[NativeFrameIdentity, ...]:
+        """Bound repeated native identity before downstream allocation."""
+        if len(value) > 256:
+            raise ValueError("occurrence identity exceeds 256 native frames")
+        return value
+
+
 class ApmEvent(BaseModel):
     """Canonical validated representation of one AndroidAPM event."""
 
@@ -66,6 +148,7 @@ class ApmEvent(BaseModel):
     global_context: dict[str, str] = Field(default_factory=dict)
     extras: dict[str, str] = Field(default_factory=dict)
     unknown: dict[str, str] = Field(default_factory=dict)
+    occurrence: OccurrenceContext | None = Field(default=None, repr=False)
 
     @field_validator("event_id")
     @classmethod
@@ -130,7 +213,12 @@ class IngestMetadata(BaseModel):
     sdk_version: str
     app_version: str | None = None
     app_build: str | None = None
+    version_code: str | None = None
+    variant: str | None = None
     protocol: str
+    release_identity_quality: IdentityQuality = IdentityQuality.ABSENT
+    installation_identity_quality: IdentityQuality = IdentityQuality.ABSENT
+    installation_id: str | None = Field(default=None, repr=False, exclude=True)
 
 
 class IngestAck(BaseModel):

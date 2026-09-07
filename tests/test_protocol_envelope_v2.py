@@ -73,7 +73,7 @@ def test_decodes_all_client_scalar_types_without_guessing() -> None:
         "bigDecimalValue": "1234567890.0000000001",
     }
     assert event.field_types["bigDecimalValue"] == "BIG_DECIMAL"
-    assert event.unknown["resource.installationId"] == "anonymous-installation"
+    assert "resource.installationId" not in event.unknown
 
 
 @pytest.mark.parametrize(
@@ -114,6 +114,14 @@ def test_rejects_legacy_fields_inside_v2_event() -> None:
     message.events[0].fields["durationMs"] = "42"
 
     with pytest.raises(ApiError, match="typed_fields"):
+        decode_envelope_v2(message.SerializeToString(), max_events=32)
+
+
+def test_rejects_v3_occurrence_inside_v2_event() -> None:
+    message = envelope()
+    message.events[0].occurrence.service_version = "1.0.0"
+
+    with pytest.raises(ApiError, match="occurrence"):
         decode_envelope_v2(message.SerializeToString(), max_events=32)
 
 

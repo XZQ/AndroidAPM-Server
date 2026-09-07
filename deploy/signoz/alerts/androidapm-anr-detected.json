@@ -1,0 +1,51 @@
+{
+  "alert": "AndroidAPM ANR detected",
+  "ruleType": "threshold_rule",
+  "alertType": "LOGS_BASED_ALERT",
+  "condition": {
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "critical",
+          "target": 0,
+          "matchType": "5",
+          "op": "1",
+          "channels": []
+        }
+      ]
+    },
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "logs",
+            "aggregations": [{ "expression": "count()" }],
+            "filter": { "expression": "android.apm.module = 'anr' AND android.apm.name = 'anr_detected' AND android.apm.release_identity_quality = 'OCCURRENCE_BOUND'" }
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A"
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": { "evalWindow": "5m0s", "frequency": "1m0s" }
+  },
+  "labels": { "component": "androidapm", "severity": "critical", "production_ready": "false" },
+  "annotations": {
+    "summary": "AndroidAPM observed one or more occurrence-bound ANR events",
+    "description": "Exact anr/anr_detected count is {{$value}}. This template has no active channel and must remain unrouted until app/environment/version scope, minimum sample, installation identity coverage, SDK-drop/late-data gates, trigger and recovery are verified in staging."
+  },
+  "notificationSettings": {
+    "groupBy": ["service.name", "deployment.environment.name", "service.version"],
+    "usePolicy": true,
+    "renotify": { "enabled": false, "interval": "30m", "alertStates": [] }
+  },
+  "version": "v5",
+  "schemaVersion": "v2alpha1"
+}

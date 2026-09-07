@@ -19,9 +19,11 @@ REQUIRED_DOCS = (
     "07-测试与验收.md",
     "08-部署与运维.md",
     "09-实施路线图.md",
+    "10-Web控制台与本地联调.md",
     "云端待建设清单.md",
 )
 MARKDOWN_LINK = re.compile(r"\[[^]]+]\(([^)]+)\)")
+IGNORED_MARKDOWN_DIRS = frozenset({".venv", "node_modules"})
 
 
 def main() -> int:
@@ -33,7 +35,7 @@ def main() -> int:
             failures.append(f"missing required document: docs/{name}")
 
     for markdown in ROOT.rglob("*.md"):
-        if ".venv" in markdown.parts:
+        if IGNORED_MARKDOWN_DIRS.intersection(markdown.parts):
             continue
         text = markdown.read_text(encoding="utf-8")
         for raw_target in MARKDOWN_LINK.findall(text):

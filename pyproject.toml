@@ -16,6 +16,7 @@ dependencies = [
   "opentelemetry-proto>=1.36,<2",
   "prometheus-client>=0.22,<1",
   "protobuf>=6.31,<7",
+  "pyelftools>=0.32,<1",
   "pydantic-settings>=2.10,<3",
   "sqlalchemy[asyncio]>=2.0.41,<3",
   "structlog>=25.4,<26",
@@ -38,6 +39,7 @@ dev = [
 [project.scripts]
 androidapm-api = "androidapm_server.main:run"
 androidapm-worker = "androidapm_server.worker:run"
+androidapm-symbolizer = "androidapm_server.symbolizer_worker:run"
 androidapm-admin = "androidapm_server.admin:run"
 
 [build-system]

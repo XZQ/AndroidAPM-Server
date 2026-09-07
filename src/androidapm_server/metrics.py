@@ -37,3 +37,14 @@ EXPORT_REQUEST_SECONDS = Histogram(
     "OTLP export request duration.",
     buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
 )
+SYMBOLIZATION_JOBS = Counter(
+    "androidapm_symbolization_jobs_total",
+    "Durable crash symbolization outcomes.",
+    ("result", "job_type"),
+)
+SYMBOLIZATION_SECONDS = Histogram(
+    "androidapm_symbolization_seconds",
+    "External retrace or llvm-symbolizer execution duration.",
+    ("job_type",),
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+)

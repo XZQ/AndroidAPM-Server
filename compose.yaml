@@ -5,6 +5,23 @@ x-app-environment: &app-environment
   APM_DATABASE_URL: postgresql+asyncpg://androidapm:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/androidapm
   APM_OTLP_LOGS_ENDPOINT: ${APM_OTLP_LOGS_ENDPOINT:-http://host.docker.internal:4318/v1/logs}
   APM_OTLP_HEADERS_JSON: '${APM_OTLP_HEADERS_JSON:-{}}'
+  APM_INSTALLATION_HMAC_KEYS_JSON: '${APM_INSTALLATION_HMAC_KEYS_JSON:-{}}'
+  APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION: ${APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION:-v1}
+  APM_ARTIFACT_STORAGE_PATH: /var/lib/androidapm/artifacts
+  APM_SYMBOLIZATION_ENABLED: ${APM_SYMBOLIZATION_ENABLED:-false}
+  APM_RETRACE_COMMAND_JSON: '${APM_RETRACE_COMMAND_JSON:-["retrace"]}'
+  APM_RETRACE_TOOL_VERSION: ${APM_RETRACE_TOOL_VERSION:-unconfigured}
+  APM_LLVM_SYMBOLIZER_COMMAND_JSON: '${APM_LLVM_SYMBOLIZER_COMMAND_JSON:-["llvm-symbolizer"]}'
+  APM_LLVM_SYMBOLIZER_TOOL_VERSION: ${APM_LLVM_SYMBOLIZER_TOOL_VERSION:-unconfigured}
+  APM_QUERY_MAX_WINDOW_DAYS: ${APM_QUERY_MAX_WINDOW_DAYS:-31}
+  APM_QUERY_MAX_ROWS: ${APM_QUERY_MAX_ROWS:-10000}
+  APM_QUERY_MAX_LIMIT: ${APM_QUERY_MAX_LIMIT:-100}
+  APM_QUERY_LATE_AFTER_SECONDS: ${APM_QUERY_LATE_AFTER_SECONDS:-900}
+  APM_QUERY_CURSOR_HMAC_KEY_B64: ${APM_QUERY_CURSOR_HMAC_KEY_B64:-}
+  APM_WEB_DIST_PATH: /app/web/dist
+  APM_WEB_SESSION_HMAC_KEY_B64: ${APM_WEB_SESSION_HMAC_KEY_B64:-}
+  APM_WEB_SESSION_TTL_SECONDS: ${APM_WEB_SESSION_TTL_SECONDS:-3600}
+  APM_WEB_SESSION_COOKIE_SECURE: ${APM_WEB_SESSION_COOKIE_SECURE:-false}
 
 services:
   postgres:
@@ -35,7 +52,7 @@ services:
     build: .
     environment: *app-environment
     ports:
-      - "8080:8080"
+      - "${APM_GATEWAY_BIND:-127.0.0.1}:8080:8080"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -46,6 +63,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    volumes:
+      - artifact-data:/var/lib/androidapm/artifacts
     restart: unless-stopped
 
   worker:
@@ -64,5 +83,24 @@ services:
       - ALL
     restart: unless-stopped
 
+  symbolizer:
+    build: .
+    command: ["androidapm-symbolizer"]
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - artifact-data:/var/lib/androidapm/artifacts
+    restart: unless-stopped
+
 volumes:
   postgres-data:
+  artifact-data:

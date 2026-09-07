@@ -1,0 +1,46 @@
+name: androidapm-server
+
+x-production-environment: &production-environment
+  APM_ENVIRONMENT: production
+  APM_WEB_SESSION_COOKIE_SECURE: "true"
+
+services:
+  migrate:
+    environment: *production-environment
+
+  gateway:
+    environment: *production-environment
+
+  worker:
+    environment: *production-environment
+
+  symbolizer:
+    environment: *production-environment
+    profiles: ["symbolization"]
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    environment:
+      APM_DOMAIN: ${APM_DOMAIN:?APM_DOMAIN is required}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+
+volumes:
+  caddy-data:
+  caddy-config:

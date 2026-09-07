@@ -19,24 +19,31 @@ from androidapm_server.constants import (
     HEADER_BATCH_ID,
     HEADER_ENVIRONMENT,
     HEADER_EVENT_COUNT,
+    HEADER_INSTALLATION_ID,
     HEADER_SCHEMA_VERSION,
     HEADER_SDK_VERSION,
+    HEADER_VARIANT,
+    HEADER_VERSION_CODE,
     LINE_CONTENT_TYPE,
     MAX_EVENT_JSON_BYTES,
     PROTOBUF_CONTENT_TYPE,
     PROTOBUF_ENVELOPE_V2_CONTENT_TYPE,
+    PROTOBUF_ENVELOPE_V3_CONTENT_TYPE,
     SCHEMA_VERSION_V1,
     SCHEMA_VERSION_V2,
+    SCHEMA_VERSION_V3,
     SUPPORTED_CONTENT_TYPES,
     SUPPORTED_SCHEMA_VERSIONS,
 )
 from androidapm_server.db.inbox import insert_batch
 from androidapm_server.db.quota import consume_quota
 from androidapm_server.db.session import get_session
-from androidapm_server.domain import IngestAck, IngestMetadata
+from androidapm_server.db.symbolization import enqueue_symbolization_jobs
+from androidapm_server.domain import IdentityQuality, IngestAck, IngestMetadata
 from androidapm_server.errors import ApiError
+from androidapm_server.identity import InstallationHmacKeyRing
 from androidapm_server.metrics import INGEST_ACK_SECONDS, INGEST_EVENTS, INGEST_REQUESTS
-from androidapm_server.protocol import decode_batch, decode_envelope_v2
+from androidapm_server.protocol import decode_batch, decode_envelope_v2, decode_envelope_v3
 from androidapm_server.protocol.compression import decompress_gzip_bounded
 
 router = APIRouter(prefix="/v1", tags=["ingest"])
@@ -68,10 +75,10 @@ async def ingest_events(
     if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
         raise ApiError(400, "unsupported_schema_version", "The schema version is not supported")
 
-    content_type, envelope_v2 = _negotiate_content_type(
+    content_type, envelope_version = _negotiate_content_type(
         request.headers.get("content-type", "")
     )
-    expected_schema = SCHEMA_VERSION_V2 if envelope_v2 else SCHEMA_VERSION_V1
+    expected_schema = envelope_version or SCHEMA_VERSION_V1
     if schema_version != expected_schema:
         raise ApiError(
             400,
@@ -79,8 +86,8 @@ async def ingest_events(
             "The schema version does not match the selected media type",
         )
     protocol_label = (
-        "protobuf_envelope_v2"
-        if envelope_v2
+        f"protobuf_envelope_v{envelope_version}"
+        if envelope_version is not None
         else ("line" if content_type == LINE_CONTENT_TYPE else "protobuf")
     )
     content_encoding = request.headers.get("content-encoding", "").strip().lower()
@@ -103,36 +110,72 @@ async def ingest_events(
     if content_encoding == GZIP_CONTENT_ENCODING:
         payload = decompress_gzip_bounded(payload, settings.max_decompressed_body_bytes)
 
-    if envelope_v2:
-        envelope = decode_envelope_v2(payload, settings.max_batch_events)
-        _validate_v2_request_headers(request, envelope.batch_id, envelope.event_count)
-        if envelope.sdk_version != sdk_version:
+    ack_batch_id: str | None = None
+    ack_event_count: int | None = None
+    if envelope_version == SCHEMA_VERSION_V2:
+        envelope_v2 = decode_envelope_v2(payload, settings.max_batch_events)
+        _validate_versioned_request_headers(request, envelope_v2.batch_id, envelope_v2.event_count)
+        if envelope_v2.sdk_version != sdk_version:
             raise ApiError(
                 400,
                 "invalid_request",
                 "The SDK version header does not match the V2 envelope",
             )
-        if envelope.service_name != app_id:
+        if envelope_v2.service_name != app_id:
             raise ApiError(
                 400,
                 "invalid_request",
                 "The app identity header does not match the V2 resource",
             )
-        if envelope.deployment_environment != environment:
+        if envelope_v2.deployment_environment != environment:
             raise ApiError(
                 400,
                 "invalid_request",
                 "The environment header does not match the V2 resource",
             )
         app_version = _optional_header(request, HEADER_APP_VERSION, 128)
-        if app_version is not None and app_version != envelope.service_version:
+        if app_version is not None and app_version != envelope_v2.service_version:
             raise ApiError(
                 400,
                 "invalid_request",
                 "The app version header does not match the V2 resource",
             )
-        events = envelope.events
-        app_version = app_version or envelope.service_version
+        events = envelope_v2.events
+        app_version = app_version or envelope_v2.service_version
+        release_quality = IdentityQuality.BATCH_DECLARED
+        installation_quality = IdentityQuality.BATCH_DECLARED
+        installation_id = envelope_v2.installation_id
+        ack_batch_id = envelope_v2.batch_id
+        ack_event_count = envelope_v2.event_count
+    elif envelope_version == SCHEMA_VERSION_V3:
+        envelope_v3 = decode_envelope_v3(payload, settings.max_batch_events)
+        _validate_versioned_request_headers(request, envelope_v3.batch_id, envelope_v3.event_count)
+        if envelope_v3.sdk_version != sdk_version:
+            raise ApiError(
+                400,
+                "invalid_request",
+                "The SDK version header does not match the V3 envelope",
+            )
+        if envelope_v3.service_name != app_id:
+            raise ApiError(
+                400,
+                "invalid_request",
+                "The app identity header does not match the V3 resource",
+            )
+        if envelope_v3.deployment_environment != environment:
+            raise ApiError(
+                400,
+                "invalid_request",
+                "The environment header does not match the V3 resource",
+            )
+        events = envelope_v3.events
+        # Batch declarations remain diagnostic only; insert_batch selects each event occurrence.
+        app_version = _optional_header(request, HEADER_APP_VERSION, 128)
+        release_quality = IdentityQuality.OCCURRENCE_BOUND
+        installation_quality = IdentityQuality.OCCURRENCE_BOUND
+        installation_id = None
+        ack_batch_id = envelope_v3.batch_id
+        ack_event_count = envelope_v3.event_count
     else:
         events = decode_batch(
             payload,
@@ -141,6 +184,15 @@ async def ingest_events(
             MAX_EVENT_JSON_BYTES,
         )
         app_version = _optional_header(request, HEADER_APP_VERSION, 128)
+        release_quality = (
+            IdentityQuality.REQUEST_DECLARED if app_version is not None else IdentityQuality.ABSENT
+        )
+        installation_id = _optional_header(request, HEADER_INSTALLATION_ID, 256)
+        installation_quality = (
+            IdentityQuality.REQUEST_DECLARED
+            if installation_id is not None
+            else IdentityQuality.ABSENT
+        )
     metadata = IngestMetadata(
         request_id=request.state.request_id,
         tenant_id=principal.tenant_id,
@@ -150,12 +202,24 @@ async def ingest_events(
         sdk_version=sdk_version,
         app_version=app_version,
         app_build=_optional_header(request, HEADER_APP_BUILD, 128),
+        version_code=_optional_header(request, HEADER_VERSION_CODE, 64),
+        variant=_optional_header(request, HEADER_VARIANT, 128),
         protocol=protocol_label,
+        release_identity_quality=release_quality,
+        installation_identity_quality=installation_quality,
+        installation_id=installation_id,
     )
+
+    installation_keys = None
+    if installation_id is not None or any(event.occurrence is not None for event in events):
+        installation_keys = _installation_key_ring(settings)
 
     try:
         await consume_quota(session, principal, len(events))
-        result = await insert_batch(session, metadata, events)
+        result = await insert_batch(session, metadata, events, installation_keys)
+        await enqueue_symbolization_jobs(
+            session, metadata, events, enabled=settings.symbolization_enabled
+        )
         # This commit is the public durability boundary. A 2xx ACK cannot precede it.
         await session.commit()
     except Exception:
@@ -167,11 +231,11 @@ async def ingest_events(
     INGEST_EVENTS.labels("inserted").inc(result.inserted)
     INGEST_EVENTS.labels("duplicate").inc(result.duplicates)
     INGEST_ACK_SECONDS.observe(time.perf_counter() - started)
-    if envelope_v2:
-        # The Android client treats these exact headers as the only V2 success signal.
-        response.headers[HEADER_SCHEMA_VERSION] = SCHEMA_VERSION_V2
-        response.headers[HEADER_BATCH_ID] = envelope.batch_id
-        response.headers[HEADER_EVENT_COUNT] = str(envelope.event_count)
+    if envelope_version is not None and ack_batch_id is not None and ack_event_count is not None:
+        # Android treats these exact post-commit headers as the only explicit-envelope success.
+        response.headers[HEADER_SCHEMA_VERSION] = envelope_version
+        response.headers[HEADER_BATCH_ID] = ack_batch_id
+        response.headers[HEADER_EVENT_COUNT] = str(ack_event_count)
     return IngestAck(
         requestId=metadata.request_id,
         received=result.received,
@@ -231,8 +295,8 @@ def _payload_too_large() -> ApiError:
     return ApiError(413, "payload_too_large", "The request body is too large")
 
 
-def _negotiate_content_type(raw_content_type: str) -> tuple[str, bool]:
-    """Distinguish legacy Protobuf frames from the explicit V2 envelope."""
+def _negotiate_content_type(raw_content_type: str) -> tuple[str, str | None]:
+    """Distinguish legacy Protobuf frames from explicit V2 and V3 envelopes."""
     parts = [part.strip() for part in raw_content_type.split(";")]
     base_type = parts[0].lower()
     if base_type not in SUPPORTED_CONTENT_TYPES:
@@ -245,28 +309,32 @@ def _negotiate_content_type(raw_content_type: str) -> tuple[str, bool]:
             raise ApiError(415, "unsupported_media_type", "The Content-Type is malformed")
         key, value = part.split("=", maxsplit=1)
         parameters[key.strip().lower()] = value.strip().strip('"')
-    envelope_v2 = (
+    envelope_version = parameters.get("version")
+    explicit_envelope = (
         base_type == PROTOBUF_CONTENT_TYPE
         and parameters.get("message") == "ApmBatchEnvelope"
-        and parameters.get("version") == SCHEMA_VERSION_V2
+        and envelope_version in {SCHEMA_VERSION_V2, SCHEMA_VERSION_V3}
     )
-    if base_type == PROTOBUF_CONTENT_TYPE and (
-        "message" in parameters or "version" in parameters
-    ) and not envelope_v2:
+    if (
+        base_type == PROTOBUF_CONTENT_TYPE
+        and ("message" in parameters or "version" in parameters)
+        and not explicit_envelope
+    ):
         raise ApiError(
             415,
             "unsupported_media_type",
-            f"The supported versioned media type is {PROTOBUF_ENVELOPE_V2_CONTENT_TYPE}",
+            "The supported versioned media types are "
+            f"{PROTOBUF_ENVELOPE_V2_CONTENT_TYPE} and {PROTOBUF_ENVELOPE_V3_CONTENT_TYPE}",
         )
-    return base_type, envelope_v2
+    return base_type, envelope_version if explicit_envelope else None
 
 
-def _validate_v2_request_headers(
+def _validate_versioned_request_headers(
     request: Request,
     body_batch_id: str,
     body_event_count: int,
 ) -> None:
-    """Require request ACK metadata to match the decoded V2 body exactly."""
+    """Require request ACK metadata to match the decoded explicit body exactly."""
     batch_id = _required_header(request, HEADER_BATCH_ID, 128)
     event_count_text = _required_header(request, HEADER_EVENT_COUNT, 16)
     try:
@@ -281,5 +349,21 @@ def _validate_v2_request_headers(
         raise ApiError(
             400,
             "invalid_request",
-            "The V2 batch identity or event count does not match the body",
+            "The batch identity or event count does not match the versioned body",
         )
+
+
+def _installation_key_ring(settings: Settings) -> InstallationHmacKeyRing:
+    """Load the versioned pseudonymization keys without exposing secret configuration."""
+    try:
+        return InstallationHmacKeyRing.parse(
+            settings.installation_hmac_keys_json.get_secret_value(),
+            settings.installation_hmac_active_key_version,
+        )
+    except ValueError as error:
+        raise ApiError(
+            503,
+            "identity_service_unavailable",
+            "Installation pseudonymization is not configured",
+            True,
+        ) from error

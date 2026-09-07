@@ -10,8 +10,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from androidapm_server.db.base import Base
 from androidapm_server.db.inbox import insert_batch
 from androidapm_server.db.models import InboxEvent
-from androidapm_server.domain import ApmEvent, IngestMetadata
+from androidapm_server.domain import ApmEvent, IngestMetadata, OccurrenceContext
 from androidapm_server.errors import ApiError
+from androidapm_server.identity import InstallationHmacKeyRing
+
+KEYS_V1 = InstallationHmacKeyRing.parse(
+    '{"v1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}',
+    "v1",
+)
+KEYS_V2 = InstallationHmacKeyRing.parse(
+    '{"v1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",'
+    '"v2":"ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA="}',
+    "v2",
+)
 
 
 @pytest_asyncio.fixture
@@ -39,7 +50,22 @@ def event(event_id: str, name: str = "request") -> ApmEvent:
     )
 
 
-def metadata(tenant_id: str = "tenant-a") -> IngestMetadata:
+def occurrence_event(event_id: str, installation_id: str = "same-installation") -> ApmEvent:
+    """Create one event whose release and installation were frozen before persistence."""
+    return event(event_id).model_copy(
+        update={
+            "occurrence": OccurrenceContext(
+                service_version="1.0.0",
+                version_code="10",
+                app_build="build-10",
+                variant="release",
+                installation_id=installation_id,
+            )
+        }
+    )
+
+
+def metadata(tenant_id: str = "tenant-a", *, app_build: str | None = None) -> IngestMetadata:
     return IngestMetadata(
         request_id="request-1",
         tenant_id=tenant_id,
@@ -47,6 +73,7 @@ def metadata(tenant_id: str = "tenant-a") -> IngestMetadata:
         environment="test",
         schema_version="1",
         sdk_version="0.1.0",
+        app_build=app_build,
         protocol="protobuf",
     )
 
@@ -94,3 +121,59 @@ async def test_conflict_inside_batch_rejects_all(session: AsyncSession) -> None:
         await insert_batch(session, metadata(), [event("same"), event("same", "changed")])
     await session.rollback()
     assert await session.scalar(select(func.count()).select_from(InboxEvent)) == 0
+
+
+@pytest.mark.asyncio
+async def test_replay_with_different_build_identity_is_not_silently_deduplicated(
+    session: AsyncSession,
+) -> None:
+    await insert_batch(session, metadata(app_build="build-one"), [event("same")])
+    await session.commit()
+    with pytest.raises(ApiError) as caught:
+        await insert_batch(session, metadata(app_build="build-two"), [event("same")])
+    await session.rollback()
+    assert caught.value.code == "event_id_conflict"
+
+
+@pytest.mark.asyncio
+async def test_installation_hmac_is_tenant_scoped_and_plaintext_free(
+    session: AsyncSession,
+) -> None:
+    plaintext = "shared-installation"
+    await insert_batch(
+        session,
+        metadata("tenant-a"),
+        [occurrence_event("tenant-a-event", plaintext)],
+        KEYS_V1,
+    )
+    await insert_batch(
+        session,
+        metadata("tenant-b"),
+        [occurrence_event("tenant-b-event", plaintext)],
+        KEYS_V1,
+    )
+    await session.commit()
+
+    rows = (await session.scalars(select(InboxEvent).order_by(InboxEvent.tenant_id))).all()
+    assert len(rows) == 2
+    assert rows[0].installation_hmac != rows[1].installation_hmac
+    assert all(plaintext not in str(row.payload_json) for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_replay_uses_stored_hmac_key_version_after_active_key_rotation(
+    session: AsyncSession,
+) -> None:
+    item = occurrence_event("rotated-key-replay")
+    first = await insert_batch(session, metadata(), [item], KEYS_V1)
+    await session.commit()
+    replay = await insert_batch(session, metadata(), [item], KEYS_V2)
+    await session.commit()
+
+    row = await session.scalar(
+        select(InboxEvent).where(InboxEvent.event_id == "rotated-key-replay")
+    )
+    assert first.inserted == 1
+    assert replay.duplicates == 1
+    assert row is not None
+    assert row.installation_hmac_key_version == "v1"

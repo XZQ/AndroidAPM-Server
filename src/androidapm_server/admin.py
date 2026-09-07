@@ -11,14 +11,19 @@ from pathlib import Path
 from sqlalchemy import func, select
 
 from androidapm_server.auth import generate_ingest_key
+from androidapm_server.ci_auth import generate_ci_key
 from androidapm_server.config import get_settings
+from androidapm_server.constants import CI_SCOPE_ARTIFACT_WRITE, QUERY_ROLES
 from androidapm_server.db.models import (
     AuditLog,
+    CiKey,
     IngestKey,
+    QueryKey,
     RemoteConfigVersion,
     Tenant,
 )
 from androidapm_server.db.session import get_session_factory
+from androidapm_server.query_auth import generate_query_key
 from androidapm_server.remote_config import generate_signing_keypair, sign_config
 
 
@@ -35,6 +40,20 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--expires-days", type=int)
     create.add_argument("--requests-per-minute", type=int, default=600)
     create.add_argument("--events-per-minute", type=int, default=30_000)
+    create_ci = subcommands.add_parser("create-ci-key")
+    create_ci.add_argument("--tenant-id", required=True)
+    create_ci.add_argument("--tenant-name", required=True)
+    create_ci.add_argument("--app-id")
+    create_ci.add_argument("--description")
+    create_ci.add_argument("--expires-days", type=int)
+    create_query = subcommands.add_parser("create-query-key")
+    create_query.add_argument("--tenant-id", required=True)
+    create_query.add_argument("--tenant-name", required=True)
+    create_query.add_argument("--app-id", required=True)
+    create_query.add_argument("--environment", required=True)
+    create_query.add_argument("--role", choices=sorted(QUERY_ROLES), required=True)
+    create_query.add_argument("--description")
+    create_query.add_argument("--expires-days", type=int)
     subcommands.add_parser("generate-config-keypair")
     publish = subcommands.add_parser("publish-config")
     publish.add_argument("--tenant-id", required=True)
@@ -91,6 +110,104 @@ async def create_ingest_key(arguments: argparse.Namespace) -> str:
                 details_json={
                     "app_id": arguments.app_id,
                     "environment": arguments.environment,
+                    "expires_at": expires_at.isoformat() if expires_at else None,
+                },
+            )
+        )
+        await session.commit()
+    return plaintext
+
+
+async def create_ci_key(arguments: argparse.Namespace) -> str:
+    """Create a separately scoped build-pipeline credential and show it once."""
+    if arguments.expires_days is not None and arguments.expires_days <= 0:
+        raise ValueError("--expires-days must be positive")
+    key_id, plaintext, key_hash = generate_ci_key()
+    expires_at = (
+        datetime.now(UTC) + timedelta(days=arguments.expires_days)
+        if arguments.expires_days is not None
+        else None
+    )
+    factory = get_session_factory()
+    async with factory() as session:
+        tenant = await session.scalar(select(Tenant).where(Tenant.id == arguments.tenant_id))
+        if tenant is None:
+            session.add(Tenant(id=arguments.tenant_id, name=arguments.tenant_name))
+        elif tenant.name != arguments.tenant_name:
+            raise ValueError("tenant id already exists with a different name")
+        session.add(
+            CiKey(
+                key_id=key_id,
+                tenant_id=arguments.tenant_id,
+                key_hash=key_hash,
+                app_id=arguments.app_id,
+                scopes_json=[CI_SCOPE_ARTIFACT_WRITE],
+                description=arguments.description,
+                expires_at=expires_at,
+            )
+        )
+        session.add(
+            AuditLog(
+                tenant_id=arguments.tenant_id,
+                actor="local-admin-cli",
+                action="ci_key.create",
+                object_type="ci_key",
+                object_id=key_id,
+                result="success",
+                details_json={
+                    "app_id": arguments.app_id,
+                    "scopes": [CI_SCOPE_ARTIFACT_WRITE],
+                    "expires_at": expires_at.isoformat() if expires_at else None,
+                },
+            )
+        )
+        await session.commit()
+    return plaintext
+
+
+async def create_query_key(arguments: argparse.Namespace) -> str:
+    """Create a fixed-scope viewer or investigator key and show it only once."""
+    if arguments.expires_days is not None and arguments.expires_days <= 0:
+        raise ValueError("--expires-days must be positive")
+    if arguments.role not in QUERY_ROLES:
+        raise ValueError("--role must be viewer or investigator")
+    key_id, plaintext, key_hash = generate_query_key()
+    expires_at = (
+        datetime.now(UTC) + timedelta(days=arguments.expires_days)
+        if arguments.expires_days is not None
+        else None
+    )
+    factory = get_session_factory()
+    async with factory() as session:
+        tenant = await session.scalar(select(Tenant).where(Tenant.id == arguments.tenant_id))
+        if tenant is None:
+            session.add(Tenant(id=arguments.tenant_id, name=arguments.tenant_name))
+        elif tenant.name != arguments.tenant_name:
+            raise ValueError("tenant id already exists with a different name")
+        session.add(
+            QueryKey(
+                key_id=key_id,
+                tenant_id=arguments.tenant_id,
+                key_hash=key_hash,
+                app_id=arguments.app_id,
+                environment=arguments.environment,
+                role=arguments.role,
+                description=arguments.description,
+                expires_at=expires_at,
+            )
+        )
+        session.add(
+            AuditLog(
+                tenant_id=arguments.tenant_id,
+                actor="local-admin-cli",
+                action="query_key.create",
+                object_type="query_key",
+                object_id=key_id,
+                result="success",
+                details_json={
+                    "app_id": arguments.app_id,
+                    "environment": arguments.environment,
+                    "role": arguments.role,
                     "expires_at": expires_at.isoformat() if expires_at else None,
                 },
             )
@@ -183,6 +300,16 @@ def run() -> None:
         print(private_key)
         print("Public key (pin in the Android client):")
         print(public_key)
+        return
+    if arguments.command == "create-ci-key":
+        plaintext = asyncio.run(create_ci_key(arguments))
+        print("CI key (shown once):")
+        print(plaintext)
+        return
+    if arguments.command == "create-query-key":
+        plaintext = asyncio.run(create_query_key(arguments))
+        print("Query key (shown once):")
+        print(plaintext)
         return
     if arguments.command == "publish-config":
         revision = asyncio.run(publish_config(arguments))

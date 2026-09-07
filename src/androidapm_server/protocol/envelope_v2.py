@@ -39,7 +39,6 @@ _RESOURCE_UNKNOWN_KEYS = {
     "resource.serviceName": "service_name",
     "resource.serviceVersion": "service_version",
     "resource.deploymentEnvironment": "deployment_environment",
-    "resource.installationId": "installation_id",
 }
 
 
@@ -94,10 +93,14 @@ def decode_envelope_v2(
     }
     for name, value in resource_values.items():
         _require_bounded(value, name, MAX_IDENTIFIER_BYTES)
+    _require_bounded(
+        message.resource.installation_id,
+        "resource.installationId",
+        MAX_IDENTIFIER_BYTES,
+    )
 
     events = [
-        _to_event(event, resource_values, index)
-        for index, event in enumerate(message.events)
+        _to_event(event, resource_values, index) for index, event in enumerate(message.events)
     ]
     expected_batch_id = stable_batch_id([event.event_id for event in events])
     if message.batch_id != expected_batch_id:
@@ -130,6 +133,11 @@ def _to_event(
     event_index: int,
 ) -> ApmEvent:
     """Convert one envelope event while retaining every scalar discriminator."""
+    if message.HasField("occurrence"):
+        raise _invalid_event(
+            "V2 events must not carry the schema V3 occurrence field",
+            event_index,
+        )
     if message.fields:
         raise _invalid_event(
             "V2 events must use typed_fields instead of legacy fields",
@@ -195,9 +203,7 @@ def _typed_value(typed: ApmTypedValue) -> object:
         parsed_float = float(value)
         if not math.isfinite(parsed_float):
             if value not in _CANONICAL_NON_FINITE_FLOATS:
-                raise ValueError(
-                    f"{scalar_type} non-finite value must use canonical Kotlin text"
-                )
+                raise ValueError(f"{scalar_type} non-finite value must use canonical Kotlin text")
             # JSON/JSONB cannot portably store IEEE non-finite numbers. Retain the exact
             # text together with field_types instead of emitting invalid JSON.
             return value

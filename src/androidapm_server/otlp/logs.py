@@ -98,12 +98,13 @@ def build_logs_request(events: Iterable[InboxEvent]) -> ExportLogsServiceRequest
     """Build one OTLP request grouped by stable resource identity."""
     grouped: dict[tuple[str, ...], list[InboxEvent]] = defaultdict(list)
     for event in events:
+        occurrence_release = event.release_identity_quality == "OCCURRENCE_BOUND"
         event_resource_key = (
             event.tenant_id,
             event.app_id,
             event.environment,
-            event.app_version or "",
-            event.app_build or "",
+            event.app_version if occurrence_release and event.app_version else "",
+            event.app_build if occurrence_release and event.app_build else "",
             event.sdk_version,
             str(event.payload_json.get("process_name", "")),
         )
@@ -117,9 +118,7 @@ def build_logs_request(events: Iterable[InboxEvent]) -> ExportLogsServiceRequest
 
 def _resource_logs(resource_key: tuple[str, ...], events: list[InboxEvent]) -> ResourceLogs:
     """Map one resource group and all of its log records."""
-    tenant_id, app_id, environment, app_version, app_build, sdk_version, process_name = (
-        resource_key
-    )
+    tenant_id, app_id, environment, app_version, app_build, sdk_version, process_name = resource_key
     attributes: dict[str, Any] = {
         "service.name": app_id,
         "android.apm.app_id": app_id,
@@ -161,21 +160,41 @@ def _log_record(event: InboxEvent) -> LogRecord:
         "android.apm.thread.name": str(payload["thread_name"]),
         "android.apm.protocol": event.protocol,
         "android.apm.schema_version": event.schema_version,
+        "android.apm.scope_identity_quality": event.scope_identity_quality,
+        "android.apm.release_identity_quality": event.release_identity_quality,
+        "android.apm.installation_identity_quality": event.installation_identity_quality,
+        "android.apm.timestamp_quality": event.timestamp_quality,
+        "android.apm.normalization_version": event.normalization_version,
     }
     for optional in ("scene", "foreground"):
         if payload.get(optional) is not None:
             attributes[f"android.apm.{optional}"] = payload[optional]
+    # Only source-reviewed normalization output is indexed. Raw URL/SQL/path/stack/message,
+    # arbitrary context, extras, and unknown fields stay recoverable in the durable inbox.
     _merge_prefixed(
         attributes,
         "android.apm.field.",
-        payload.get("fields", {}),
-        coerce_registered_fields=True,
+        (event.normalized_json or {}).get("indexed_attributes", {}),
     )
-    _merge_prefixed(attributes, "android.apm.context.", payload.get("global_context", {}))
-    _merge_prefixed(attributes, "android.apm.extra.", payload.get("extras", {}))
-
+    if event.installation_hmac:
+        attributes["android.apm.installation.hmac"] = event.installation_hmac
+    if event.installation_hmac_key_version:
+        attributes["android.apm.installation.hmac_key_version"] = (
+            event.installation_hmac_key_version
+        )
+    if event.incident_fingerprint:
+        attributes["android.apm.incident.fingerprint"] = event.incident_fingerprint
+    symbolization = event.symbolization_job
+    if symbolization is not None:
+        attributes["android.apm.symbolization.status"] = symbolization.status
+        if symbolization.fingerprint_sha256:
+            attributes["android.apm.crash.fingerprint"] = symbolization.fingerprint_sha256
+        if symbolization.tool_name:
+            attributes["android.apm.symbolization.tool"] = symbolization.tool_name
+        if symbolization.tool_version:
+            attributes["android.apm.symbolization.tool_version"] = symbolization.tool_version
     return LogRecord(
-        time_unix_nano=event.event_timestamp_ms * 1_000_000,
+        time_unix_nano=(event.occurrence_timestamp_ms or event.event_timestamp_ms) * 1_000_000,
         observed_time_unix_nano=int(event.received_at.timestamp() * 1_000_000_000),
         severity_number=SEVERITY_NUMBERS.get(severity, SEVERITY_NUMBER_UNSPECIFIED),
         severity_text=severity,
