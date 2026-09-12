@@ -1,5 +1,7 @@
 # AndroidAPM-Server
 
+Symbol tools stream stdout/stderr concurrently with stdin, enforcing a separate 1 MiB limit per output stream before retaining additional bytes. Overflow terminates and reaps the direct child immediately; timeout/cancellation cleanup drains remaining pipe bytes without accumulating them.
+
 Native symbolization verifies every typed occurrence frame against its raw module-relative PC, module name and optional inline build ID, then uses the exact scoped ELF per ABI/build ID. Missing modules wait without consuming tool attempts; all-unknown output fails, while function-only or mixed results are `partially_symbolized`. Per-frame resolution and artifact provenance are retained in L2 evidence. A local two-module NDK LLVM regression is available with `APM_TEST_NDK_BIN`; real-device crash capture and production tool images still require verification.
 
 Java mapping validation accepts dotted JVM class names, including kept package/class names, inner classes, Unicode and generated lambda names. Empty segments, descriptor/path punctuation and NUL-containing input remain invalid.

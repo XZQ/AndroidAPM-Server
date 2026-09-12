@@ -27,6 +27,7 @@ NATIVE_BUILD_ID_PATTERN = re.compile(r"^[0-9a-f]{8,128}$")
 NATIVE_INLINE_BUILD_ID = re.compile(r"\(BuildId:\s*([0-9a-fA-F]+)\)")
 MAX_NATIVE_FRAMES = 256
 MAX_TOOL_OUTPUT_BYTES = 1 * 1_024 * 1_024
+TOOL_READ_CHUNK_BYTES = 64 * 1_024
 MAX_FINGERPRINT_LINES = 32
 NativeArtifacts = dict[tuple[str, str], tuple[SymbolArtifact, Path]]
 
@@ -305,7 +306,7 @@ def _parse_command(raw: str, label: str) -> list[str]:
 
 
 async def _run_tool(args: list[str], standard_input: bytes, timeout_seconds: float) -> str:
-    """Execute a trusted fixed binary directly and bound runtime and retained output."""
+    """Execute a trusted binary with concurrent input/output and per-stream memory limits."""
     try:
         process = await asyncio.create_subprocess_exec(
             *args,
@@ -317,27 +318,38 @@ async def _run_tool(args: list[str], standard_input: bytes, timeout_seconds: flo
         raise SymbolizationFailure(
             "tool_unavailable", "The configured symbolization executable was not found", True
         ) from error
+    assert process.stdin is not None and process.stdout is not None and process.stderr is not None
+    stdout_task = asyncio.create_task(_read_tool_stream(process.stdout))
+    stderr_task = asyncio.create_task(_read_tool_stream(process.stderr))
+    stdin_task = asyncio.create_task(_feed_tool_stdin(process.stdin, standard_input))
+    tasks = (stdout_task, stderr_task, stdin_task)
     try:
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(standard_input), timeout=timeout_seconds
-        )
-    except (TimeoutError, asyncio.CancelledError) as error:
-        # Lease deadlines and shutdown cancellation must not leave a tool running.
+        async with asyncio.timeout(timeout_seconds):
+            await asyncio.gather(*tasks)
+            await process.wait()
+    except BaseException as error:
+        # An overflowing stream, lease deadline or shutdown must stop the direct child.
         if process.returncode is None:
             try:
                 process.kill()
             except ProcessLookupError:
                 pass  # The process may have exited between the returncode check and kill.
-        await process.communicate()
-        if isinstance(error, asyncio.CancelledError):
-            raise
-        raise SymbolizationFailure(
-            "tool_timeout", "The symbolization tool exceeded its time limit", True
-        ) from error
-    if len(stdout) > MAX_TOOL_OUTPUT_BYTES or len(stderr) > MAX_TOOL_OUTPUT_BYTES:
-        raise SymbolizationFailure(
-            "tool_output_too_large", "The symbolization tool output exceeded its limit", False
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        # A killed process can still have a paused/full pipe. Discard buffered bytes while
+        # reaping instead of communicate(), which would reintroduce unbounded buffering.
+        await asyncio.gather(
+            _discard_tool_stream(process.stdout),
+            _discard_tool_stream(process.stderr),
+            process.wait(),
         )
+        if isinstance(error, TimeoutError):
+            raise SymbolizationFailure(
+                "tool_timeout", "The symbolization tool exceeded its time limit", True
+            ) from error
+        raise
+    stdout, stderr = stdout_task.result(), stderr_task.result()
     if process.returncode != 0:
         message = stderr.decode("utf-8", errors="replace").strip()[:512]
         raise SymbolizationFailure(
@@ -354,6 +366,40 @@ async def _run_tool(args: list[str], standard_input: bytes, timeout_seconds: flo
             "empty_tool_output", "The symbolization tool returned no frames", False
         )
     return output
+
+
+async def _read_tool_stream(stream: asyncio.StreamReader) -> bytes:
+    """Reject overflow before retaining the next chunk; never buffer until process exit."""
+    output = bytearray()
+    while chunk := await stream.read(TOOL_READ_CHUNK_BYTES):
+        if len(output) + len(chunk) > MAX_TOOL_OUTPUT_BYTES:
+            raise SymbolizationFailure(
+                "tool_output_too_large", "The symbolization tool output exceeded its limit", False
+            )
+        output.extend(chunk)
+    return bytes(output)
+
+
+async def _feed_tool_stdin(writer: asyncio.StreamWriter, data: bytes) -> None:
+    """Feed bounded chunks concurrently so a tool writing before reading cannot deadlock."""
+    try:
+        for offset in range(0, len(data), TOOL_READ_CHUNK_BYTES):
+            writer.write(data[offset : offset + TOOL_READ_CHUNK_BYTES])
+            await writer.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        pass  # A tool may reject input and close stdin before the entire stack is sent.
+    finally:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+
+async def _discard_tool_stream(stream: asyncio.StreamReader) -> None:
+    """Drain a terminated child's remaining pipe bytes without retaining output."""
+    while await stream.read(TOOL_READ_CHUNK_BYTES):
+        pass
 
 
 def _result(output: str, tool_name: str, tool_version: str) -> SymbolizationResult:

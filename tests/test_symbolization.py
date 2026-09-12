@@ -50,7 +50,12 @@ from androidapm_server.domain import (
 from androidapm_server.identity import InstallationHmacKeyRing
 from androidapm_server.query import build_top_fingerprints
 from androidapm_server.query_auth import QueryPrincipal
-from androidapm_server.symbolization import SymbolizationFailure, _run_tool, symbolize_job
+from androidapm_server.symbolization import (
+    MAX_TOOL_OUTPUT_BYTES,
+    SymbolizationFailure,
+    _run_tool,
+    symbolize_job,
+)
 
 TEST_KEY_RING = InstallationHmacKeyRing.parse(
     '{"v1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}',
@@ -574,3 +579,46 @@ async def test_tool_process_is_killed_and_reaped_on_cancellation_or_timeout(
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+async def test_tool_output_overflow_stops_and_reaps_before_process_exit(
+    monkeypatch: pytest.MonkeyPatch, stream: str
+) -> None:
+    processes: list[asyncio.subprocess.Process] = []
+    real_spawn = asyncio.create_subprocess_exec
+
+    async def observe_spawn(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await real_spawn(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observe_spawn)
+    # No EOF: the former communicate()-then-check implementation waits for the timeout.
+    script = (
+        f"import sys,time; sys.{stream}.buffer.write(b'x'*{MAX_TOOL_OUTPUT_BYTES + 1}); "
+        f"sys.{stream}.flush(); time.sleep(30)"
+    )
+    with pytest.raises(SymbolizationFailure) as error:
+        await asyncio.wait_for(_run_tool([sys.executable, "-c", script], b"", 20), 10)
+    assert error.value.code == "tool_output_too_large" and not error.value.retryable
+    assert len(processes) == 1 and processes[0].returncode is not None
+
+
+async def test_tool_accepts_exact_output_limit_independently_for_both_streams() -> None:
+    script = (
+        f"import sys; sys.stdout.buffer.write(b'x'*{MAX_TOOL_OUTPUT_BYTES}); "
+        f"sys.stderr.buffer.write(b'y'*{MAX_TOOL_OUTPUT_BYTES})"
+    )
+    output = await _run_tool([sys.executable, "-c", script], b"", 10)
+    assert output == "x" * MAX_TOOL_OUTPUT_BYTES
+
+
+async def test_tool_pipes_progress_when_output_precedes_large_input_read() -> None:
+    script = (
+        "import sys; sys.stdout.buffer.write(b'x'*262144); sys.stdout.flush(); "
+        "sys.stderr.buffer.write(b'y'*262144); sys.stderr.flush(); "
+        "data=sys.stdin.buffer.read(); print(len(data))"
+    )
+    output = await _run_tool([sys.executable, "-c", script], b"z" * (2 * MAX_TOOL_OUTPUT_BYTES), 10)
+    assert output == "x" * 262144 + str(2 * MAX_TOOL_OUTPUT_BYTES)

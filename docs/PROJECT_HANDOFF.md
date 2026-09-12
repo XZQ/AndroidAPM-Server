@@ -16,6 +16,8 @@
 
 6. Native 多模块：逐帧核对 typed/raw 模块身份和 PC，按精确 ABI/build-id 路由 ELF，缺少任一模块不花费尝试次数；未知、函数级和源码级解析分开，保存逐帧制品证据及部分完成状态。34 项相关测试通过，含 NDK 27.0.12077973 编译双 ELF 并实际执行 LLVM 的交错帧回归；完整门禁为后端 196 tests（显式提供 NDK 路径）、前端 16 tests。
 
+7. 工具输出内存：并发分块处理三条管道，stdout/stderr 各自 1 MiB，在追加前检查；溢出立即 kill/reap，超时/取消清理只丢弃剩余字节。真实 Python 子进程覆盖双流超限后阻塞、精确边界和先输出后读大输入，38 项符号化测试通过；完整门禁为后端 200 tests（含本机 NDK）、前端 16 tests。
+
 环境边界：本轮没有 Docker/Podman/psql，未配置 PostgreSQL 集成连接。SQLite/合成数据及本机双 ELF LLVM 验证不能替代 PostgreSQL、真实 R8/设备崩溃采集、生产工具镜像、Compose/SigNoz/TLS 验收。
 
 ## 2026-09-07 顺序整改
