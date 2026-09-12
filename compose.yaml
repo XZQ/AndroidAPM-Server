@@ -1,0 +1,120 @@
+name: androidapm-server
+
+x-app-environment: &app-environment
+  APM_ENVIRONMENT: local
+  APM_DATABASE_URL: postgresql+asyncpg://androidapm:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/androidapm
+  APM_OTLP_LOGS_ENDPOINT: ${APM_OTLP_LOGS_ENDPOINT:-http://host.docker.internal:4318/v1/logs}
+  APM_OTLP_HEADERS_JSON: '${APM_OTLP_HEADERS_JSON:-{}}'
+  APM_INSTALLATION_HMAC_KEYS_JSON: '${APM_INSTALLATION_HMAC_KEYS_JSON:-{}}'
+  APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION: ${APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION:-v1}
+  APM_ARTIFACT_STORAGE_PATH: /var/lib/androidapm/artifacts
+  APM_SYMBOLIZATION_ENABLED: ${APM_SYMBOLIZATION_ENABLED:-false}
+  APM_RETRACE_COMMAND_JSON: '${APM_RETRACE_COMMAND_JSON:-["retrace"]}'
+  APM_RETRACE_TOOL_VERSION: ${APM_RETRACE_TOOL_VERSION:-unconfigured}
+  APM_LLVM_SYMBOLIZER_COMMAND_JSON: '${APM_LLVM_SYMBOLIZER_COMMAND_JSON:-["llvm-symbolizer"]}'
+  APM_LLVM_SYMBOLIZER_TOOL_VERSION: ${APM_LLVM_SYMBOLIZER_TOOL_VERSION:-unconfigured}
+  APM_METRICS_BIND: 0.0.0.0
+  APM_WORKER_METRICS_PORT: 9101
+  APM_SYMBOLIZER_METRICS_PORT: 9102
+  APM_QUERY_MAX_WINDOW_DAYS: ${APM_QUERY_MAX_WINDOW_DAYS:-31}
+  APM_QUERY_MAX_ROWS: ${APM_QUERY_MAX_ROWS:-10000}
+  APM_QUERY_MAX_LIMIT: ${APM_QUERY_MAX_LIMIT:-100}
+  APM_QUERY_LATE_AFTER_SECONDS: ${APM_QUERY_LATE_AFTER_SECONDS:-900}
+  APM_QUERY_MIN_INSTALLATIONS: ${APM_QUERY_MIN_INSTALLATIONS:-100}
+  APM_QUERY_MIN_SDK_HEALTH_COVERAGE: ${APM_QUERY_MIN_SDK_HEALTH_COVERAGE:-1.0}
+  APM_RETENTION_ENABLED: ${APM_RETENTION_ENABLED:-true}
+  APM_DELIVERED_RETENTION_DAYS: ${APM_DELIVERED_RETENTION_DAYS:-7}
+  APM_DEAD_LETTER_RETENTION_DAYS: ${APM_DEAD_LETTER_RETENTION_DAYS:-30}
+  APM_RETENTION_BATCH_SIZE: ${APM_RETENTION_BATCH_SIZE:-1000}
+  APM_RETENTION_INTERVAL_SECONDS: ${APM_RETENTION_INTERVAL_SECONDS:-60}
+  APM_INBOX_MAX_LIVE_EVENTS: ${APM_INBOX_MAX_LIVE_EVENTS:-100000}
+  APM_INBOX_MAX_RAW_BYTES: ${APM_INBOX_MAX_RAW_BYTES:-10737418240}
+  APM_QUERY_CURSOR_HMAC_KEY_B64: ${APM_QUERY_CURSOR_HMAC_KEY_B64:-}
+  APM_WEB_DIST_PATH: /app/web/dist
+  APM_WEB_SESSION_HMAC_KEY_B64: ${APM_WEB_SESSION_HMAC_KEY_B64:-}
+  APM_WEB_SESSION_TTL_SECONDS: ${APM_WEB_SESSION_TTL_SECONDS:-3600}
+  APM_WEB_SESSION_COOKIE_SECURE: ${APM_WEB_SESSION_COOKIE_SECURE:-false}
+
+services:
+  postgres:
+    image: postgres:16.9-bookworm
+    environment:
+      POSTGRES_DB: androidapm
+      POSTGRES_USER: androidapm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-only-change-me}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U androidapm -d androidapm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment: *app-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  gateway:
+    build: .
+    environment: *app-environment
+    ports:
+      - "${APM_GATEWAY_BIND:-127.0.0.1}:8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - artifact-data:/var/lib/androidapm/artifacts
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["androidapm-worker"]
+    expose: ["9101"]
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+  symbolizer:
+    build: .
+    command: ["androidapm-symbolizer"]
+    expose: ["9102"]
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - artifact-data:/var/lib/androidapm/artifacts
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  artifact-data:

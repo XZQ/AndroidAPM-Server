@@ -1,0 +1,51 @@
+{
+  "alert": "AndroidAPM SDK drop rate high",
+  "ruleType": "threshold_rule",
+  "alertType": "LOGS_BASED_ALERT",
+  "condition": {
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0.01,
+          "matchType": "5",
+          "op": "1",
+          "channels": []
+        }
+      ]
+    },
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "logs",
+            "aggregations": [{ "expression": "p95(android.apm.field.dropRate)" }],
+            "filter": { "expression": "android.apm.module = 'core' AND android.apm.name = 'sdk_health' AND android.apm.release_identity_quality = 'OCCURRENCE_BOUND'" }
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A"
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": { "evalWindow": "15m0s", "frequency": "1m0s" }
+  },
+  "labels": { "component": "androidapm-sdk", "severity": "warning", "production_ready": "false" },
+  "annotations": {
+    "summary": "AndroidAPM SDK event drop ratio exceeds 1%",
+    "description": "P95 drop ratio from exact core/sdk_health events is {{$value}}. This template has no active channel and must remain unrouted until app/environment/version scope, non-empty sample, late-data behavior, trigger and recovery are verified in staging."
+  },
+  "notificationSettings": {
+    "groupBy": ["service.name", "service.version"],
+    "usePolicy": true,
+    "renotify": { "enabled": false, "interval": "30m", "alertStates": [] }
+  },
+  "version": "v5",
+  "schemaVersion": "v2alpha1"
+}

@@ -1,0 +1,12 @@
+# Merge these private-network scrape jobs into the operator's Prometheus configuration.
+# Backlog gauges are the same database observed by multiple targets: do not sum across jobs.
+scrape_configs:
+  - job_name: androidapm-gateway
+    static_configs:
+      - targets: [gateway:8080]
+  - job_name: androidapm-export
+    static_configs:
+      - targets: [worker:9101]
+  - job_name: androidapm-symbolizer
+    static_configs:
+      - targets: [symbolizer:9102]

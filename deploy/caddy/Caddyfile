@@ -1,0 +1,21 @@
+{$APM_DOMAIN} {
+    @private_metrics path /metrics /metrics/*
+    respond @private_metrics 404
+    encode zstd gzip
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        -Server
+    }
+
+    reverse_proxy gateway:8080 {
+        health_uri /health/live
+        health_interval 15s
+        health_timeout 3s
+    }
+
+    log {
+        output stdout
+        format json
+    }
+}
