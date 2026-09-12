@@ -1,5 +1,7 @@
 # AndroidAPM-Server
 
+Native symbolization verifies every typed occurrence frame against its raw module-relative PC, module name and optional inline build ID, then uses the exact scoped ELF per ABI/build ID. Missing modules wait without consuming tool attempts; all-unknown output fails, while function-only or mixed results are `partially_symbolized`. Per-frame resolution and artifact provenance are retained in L2 evidence. A local two-module NDK LLVM regression is available with `APM_TEST_NDK_BIN`; real-device crash capture and production tool images still require verification.
+
 Java mapping validation accepts dotted JVM class names, including kept package/class names, inner classes, Unicode and generated lambda names. Empty segments, descriptor/path punctuation and NUL-containing input remain invalid.
 
 Migration `20260912_0007` preserves raw fingerprint aliases and applies completed Java symbol fingerprints to Issue grouping. New completions update the Issue identity within the fenced symbolization transaction. Old links resolve within the authenticated scope/window; ambiguous splits return `409 ambiguous_issue_fingerprint`. Raw replay identity remains unchanged; previously exported SigNoz records are not rewritten. See ADR 0009.

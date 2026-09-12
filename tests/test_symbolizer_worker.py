@@ -12,9 +12,11 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from androidapm_server import symbolizer_worker
+from androidapm_server.artifacts import ArtifactIdentity
 from androidapm_server.config import Settings
 from androidapm_server.constants import (
     ARTIFACT_TYPE_JAVA_MAPPING,
+    ARTIFACT_TYPE_NATIVE_ELF,
     INBOX_STATUS_AWAITING_SYMBOLS,
     INBOX_STATUS_PENDING,
     SYMBOL_STATUS_FAILED,
@@ -26,8 +28,16 @@ from androidapm_server.constants import (
 from androidapm_server.db.base import Base
 from androidapm_server.db.inbox import insert_batch
 from androidapm_server.db.models import InboxEvent, SymbolArtifact, SymbolizationJob, Tenant
-from androidapm_server.db.symbolization import enqueue_symbolization_jobs
-from androidapm_server.domain import ApmEvent, IngestMetadata, OccurrenceContext
+from androidapm_server.db.symbolization import (
+    enqueue_symbolization_jobs,
+    requeue_matching_missing_jobs,
+)
+from androidapm_server.domain import (
+    ApmEvent,
+    IngestMetadata,
+    NativeFrameIdentity,
+    OccurrenceContext,
+)
 from androidapm_server.identity import InstallationHmacKeyRing
 from androidapm_server.metrics import SYMBOLIZATION_JOBS
 from androidapm_server.symbolization import SymbolizationFailure, SymbolizationResult
@@ -365,3 +375,97 @@ async def test_lease_deadline_also_bounds_artifact_resolution(
         assert job is not None and job.status == SYMBOL_STATUS_PENDING
         assert job.last_error_code == "symbolizer_lease_budget_exhausted"
         assert job.attempt_count == 0
+
+
+@pytest.mark.parametrize("partial", [True, False])
+async def test_second_native_module_waits_without_attempt_and_upload_wakes_job(
+    factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    partial: bool,
+) -> None:
+    crash = event("native-two-modules")
+    assert crash.occurrence is not None
+    frames = tuple(
+        NativeFrameIdentity(
+            abi="arm64-v8a",
+            module_build_id=str(index) * 40,
+            module_name=f"lib{index}.so",
+            module_relative_pc=index * 16,
+        )
+        for index in (1, 2)
+    )
+    crash = crash.model_copy(
+        update={
+            "name": "native_crash",
+            "fields": {"backtrace": "#00 pc 10 lib1.so\n#01 pc 20 lib2.so"},
+            "occurrence": crash.occurrence.model_copy(update={"native_frames": frames}),
+        }
+    )
+    artifacts = [
+        SymbolArtifact(
+            tenant_id="tenant-a",
+            artifact_type=ARTIFACT_TYPE_NATIVE_ELF,
+            app_id="com.example",
+            version_code="42",
+            app_build="build-1",
+            variant="release",
+            abi=frame.abi,
+            build_id=frame.module_build_id,
+            checksum_sha256=str(index) * 64,
+            size_bytes=1,
+            storage_key=frame.module_name,
+            uploaded_by="ci",
+        )
+        for index, frame in enumerate(frames, 1)
+    ]
+    for artifact in artifacts:
+        (tmp_path / artifact.storage_key).write_bytes(b"synthetic")
+    async with factory() as session:
+        await insert_batch(session, metadata(), [crash], TEST_KEY_RING)
+        await enqueue_symbolization_jobs(session, metadata(), [crash])
+        session.add(artifacts[0])
+        await session.commit()
+    configure_worker(monkeypatch, factory, tmp_path)
+    tool = AsyncMock(
+        side_effect=["first\nfirst.c:1:2", "??\n??:0:0" if partial else "second\nsecond.c:2:3"]
+    )
+    monkeypatch.setattr("androidapm_server.symbolization._run_tool", tool)
+    assert await symbolize_once("owner") == 1
+    tool.assert_not_awaited()
+    async with factory() as session:
+        job = await session.scalar(select(SymbolizationJob))
+        assert job is not None and job.status == SYMBOL_STATUS_SYMBOLS_MISSING
+        assert job.attempt_count == 0
+        session.add(artifacts[1])
+        await session.flush()
+        assert (
+            await requeue_matching_missing_jobs(
+                session,
+                ArtifactIdentity(
+                    ARTIFACT_TYPE_NATIVE_ELF,
+                    "tenant-a",
+                    "com.example",
+                    "42",
+                    "build-1",
+                    "release",
+                    frames[1].abi,
+                    frames[1].module_build_id,
+                ),
+            )
+            == 1
+        )
+        await session.commit()
+    assert await symbolize_once("owner") == 1
+    assert tool.await_count == 2
+    async with factory() as session:
+        job = await session.scalar(select(SymbolizationJob))
+        inbox = await session.scalar(select(InboxEvent))
+        assert job is not None
+        assert job.status == ("partially_symbolized" if partial else "symbolized")
+        assert job.attempt_count == 1 and job.lease_owner is None
+        assert job.result_json is not None
+        assert [frame["artifactId"] for frame in job.result_json["nativeFrames"]] == [
+            artifact.id for artifact in artifacts
+        ]
+        assert inbox is not None and inbox.status == INBOX_STATUS_PENDING

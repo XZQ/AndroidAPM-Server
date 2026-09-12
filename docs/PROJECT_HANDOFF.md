@@ -14,7 +14,9 @@
 
 5. Java mapping：校验支持包名、保留类名、内部类、Unicode 和 JVM 合成名字，仍拒绝空段/非法 descriptor/NUL。15 个格式样本和 6 个制品 API 回归通过，包含带包名 mapping 的上传/重放；完整门禁为后端 181 tests、前端 16 tests。
 
-环境边界：本轮没有 Docker/Podman/psql，未配置 PostgreSQL 集成连接。SQLite/合成数据和本机门禁不能替代 PostgreSQL、真实 R8/LLVM、Compose/SigNoz/TLS 验收。
+6. Native 多模块：逐帧核对 typed/raw 模块身份和 PC，按精确 ABI/build-id 路由 ELF，缺少任一模块不花费尝试次数；未知、函数级和源码级解析分开，保存逐帧制品证据及部分完成状态。34 项相关测试通过，含 NDK 27.0.12077973 编译双 ELF 并实际执行 LLVM 的交错帧回归；完整门禁为后端 196 tests（显式提供 NDK 路径）、前端 16 tests。
+
+环境边界：本轮没有 Docker/Podman/psql，未配置 PostgreSQL 集成连接。SQLite/合成数据及本机双 ELF LLVM 验证不能替代 PostgreSQL、真实 R8/设备崩溃采集、生产工具镜像、Compose/SigNoz/TLS 验收。
 
 ## 2026-09-07 顺序整改
 

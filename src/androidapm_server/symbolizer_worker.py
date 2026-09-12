@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from androidapm_server.artifacts import LocalArtifactStore
 from androidapm_server.config import Settings, get_settings
-from androidapm_server.constants import SYMBOLIZER_FINALIZE_MARGIN_SECONDS
+from androidapm_server.constants import SYMBOL_JOB_NATIVE, SYMBOLIZER_FINALIZE_MARGIN_SECONDS
 from androidapm_server.db.leases import new_lease_owner
 from androidapm_server.db.models import SymbolizationJob
 from androidapm_server.db.session import get_session_factory
@@ -22,6 +22,7 @@ from androidapm_server.db.symbolization import (
     mark_symbolized,
     mark_symbols_missing,
     resolve_artifact,
+    resolve_native_artifacts,
     start_symbolization_attempt,
 )
 from androidapm_server.logging import configure_logging
@@ -31,7 +32,7 @@ from androidapm_server.metrics import (
     WORKER_CYCLE_TIMESTAMP,
 )
 from androidapm_server.observability import worker_observability
-from androidapm_server.symbolization import SymbolizationFailure, symbolize_job
+from androidapm_server.symbolization import NativeArtifacts, SymbolizationFailure, symbolize_job
 
 logger = structlog.get_logger(__name__)
 
@@ -108,8 +109,17 @@ async def _process_claim(
     job: SymbolizationJob,
 ) -> str | None:
     """Resolve one claimed job and return its label only after a committed transition."""
+    native_artifacts: NativeArtifacts | None = None
     async with factory() as session:
-        artifact = await resolve_artifact(session, job)
+        if job.job_type == SYMBOL_JOB_NATIVE:
+            modules = await resolve_native_artifacts(session, job)
+            artifact = modules[0] if modules else None
+            native_artifacts = {
+                (module.abi, module.build_id): (module, store.path_for(module.storage_key))
+                for module in modules
+            }
+        else:
+            artifact = await resolve_artifact(session, job)
     if artifact is None:
         async with factory() as session:
             changed = await mark_symbols_missing(
@@ -141,6 +151,7 @@ async def _process_claim(
             settings.llvm_symbolizer_command_json,
             settings.llvm_symbolizer_tool_version,
             settings.symbolizer_timeout_seconds,
+            native_artifacts,
         )
     async with factory() as session:
         changed = await mark_symbolized(
@@ -152,9 +163,10 @@ async def _process_claim(
             result.fingerprint_sha256,
             result.tool_name,
             result.tool_version,
+            status=result.status,
         )
         await session.commit()
-    return "symbolized" if changed else None
+    return result.status if changed else None
 
 
 async def _record_failure(

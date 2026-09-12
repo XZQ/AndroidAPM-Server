@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 
 from androidapm_server.artifacts import ArtifactIdentity
 from androidapm_server.constants import (
+    ARTIFACT_STATUS_ACTIVE,
     ARTIFACT_TYPE_JAVA_MAPPING,
     ARTIFACT_TYPE_NATIVE_ELF,
     INBOX_STATUS_AWAITING_SYMBOLS,
@@ -26,6 +27,7 @@ from androidapm_server.constants import (
     SYMBOL_STATUS_DISABLED,
     SYMBOL_STATUS_FAILED,
     SYMBOL_STATUS_METADATA_MISSING,
+    SYMBOL_STATUS_PARTIALLY_SYMBOLIZED,
     SYMBOL_STATUS_PENDING,
     SYMBOL_STATUS_PROCESSING,
     SYMBOL_STATUS_SYMBOLIZED,
@@ -34,6 +36,7 @@ from androidapm_server.constants import (
 from androidapm_server.db.leases import lease_claim_time, lease_write_time
 from androidapm_server.db.models import InboxEvent, SymbolArtifact, SymbolizationJob, utc_now
 from androidapm_server.domain import ApmEvent, IngestMetadata
+from androidapm_server.symbolization import native_frames_for_job
 
 JAVA_CRASH_NAMES = frozenset({"java_crash"})
 NATIVE_CRASH_NAMES = frozenset({"native_crash", "tombstone_crash"})
@@ -199,6 +202,38 @@ async def start_symbolization_attempt(
     return True
 
 
+async def resolve_native_artifacts(
+    session: AsyncSession, job: SymbolizationJob
+) -> list[SymbolArtifact]:
+    """Resolve the complete module set in one scoped query before spending a tool attempt."""
+    frames = native_frames_for_job(job)
+    identity = artifact_identity_for_job(job)
+    if identity is None:
+        return []
+    required = {(frame.abi, frame.module_build_id.lower()) for frame in frames}
+    artifacts = list(
+        (
+            await session.scalars(
+                select(SymbolArtifact).where(
+                    SymbolArtifact.tenant_id == identity.tenant_id,
+                    SymbolArtifact.artifact_type == ARTIFACT_TYPE_NATIVE_ELF,
+                    SymbolArtifact.status == ARTIFACT_STATUS_ACTIVE,
+                    SymbolArtifact.app_id == identity.app_id,
+                    SymbolArtifact.version_code == identity.version_code,
+                    SymbolArtifact.app_build == identity.app_build,
+                    SymbolArtifact.variant == identity.variant,
+                    tuple_(SymbolArtifact.abi, SymbolArtifact.build_id).in_(required),
+                )
+            )
+        ).all()
+    )
+    return (
+        artifacts
+        if {(artifact.abi, artifact.build_id) for artifact in artifacts} == required
+        else []
+    )
+
+
 async def resolve_artifact(session: AsyncSession, job: SymbolizationJob) -> SymbolArtifact | None:
     """Resolve only the exact build identity carried by the crash event and envelope."""
     identity = artifact_identity_for_job(job)
@@ -296,8 +331,14 @@ async def mark_symbolized(
     tool_name: str,
     tool_version: str,
     now: datetime | None = None,
+    *,
+    status: str = SYMBOL_STATUS_SYMBOLIZED,
 ) -> bool:
     """Persist deterministic output and release the corresponding inbox row for OTLP export."""
+    if status not in {SYMBOL_STATUS_SYMBOLIZED, SYMBOL_STATUS_PARTIALLY_SYMBOLIZED} or (
+        status == SYMBOL_STATUS_PARTIALLY_SYMBOLIZED and job.job_type != SYMBOL_JOB_NATIVE
+    ):
+        raise ValueError("Unsupported symbolization completion status")
     observed = lease_write_time(session, now)
     changed = await session.execute(
         update(SymbolizationJob)
@@ -308,7 +349,7 @@ async def mark_symbolized(
             SymbolizationJob.lease_expires_at > observed,
         )
         .values(
-            status=SYMBOL_STATUS_SYMBOLIZED,
+            status=status,
             artifact_id=artifact_id,
             result_json=result_json,
             fingerprint_sha256=fingerprint_sha256,
@@ -403,13 +444,31 @@ async def requeue_matching_missing_jobs(session: AsyncSession, identity: Artifac
     )
     changed = 0
     for job in jobs:
-        if artifact_identity_for_job(job) != identity:
+        matches = (
+            artifact_identity_for_job(job) == identity
+            if job_type == SYMBOL_JOB_JAVA
+            else any(
+                frame.get("abi") == identity.abi
+                and str(frame.get("module_build_id", "")).lower() == identity.build_id
+                for frame in job.inbox_event.native_identity_json
+            )
+        )
+        if not matches:
             continue
-        job.status = SYMBOL_STATUS_PENDING
-        job.next_attempt_at = utc_now()
-        job.last_error_code = None
-        job.last_error_message = None
-        changed += 1
+        result = await session.execute(
+            update(SymbolizationJob)
+            .where(
+                SymbolizationJob.id == job.id,
+                SymbolizationJob.status == SYMBOL_STATUS_SYMBOLS_MISSING,
+            )
+            .values(
+                status=SYMBOL_STATUS_PENDING,
+                next_attempt_at=utc_now(),
+                last_error_code=None,
+                last_error_message=None,
+            )
+        )
+        changed += int(result.rowcount)  # type: ignore[attr-defined]
     await session.flush()
     return changed
 
