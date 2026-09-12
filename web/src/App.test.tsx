@@ -54,3 +54,22 @@ function requestPath(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
   return input instanceof URL ? input.toString() : input.url;
 }
+
+it.each(["new", "baseline"])("keeps the trust banner unavailable when the %s release fails quality gates", async (side) => {
+  window.history.pushState({}, "", "/apps/com.example/overview");
+  const metric = { state: "ZERO", value: 0, numerator: null, denominator: null, sampleCount: 1, coverage: 1, asOfMs: 2000, source: "durable_inbox", reason: null };
+  const metrics = Object.fromEntries(["javaCrashEvents", "anrEvents", "affectedInstallations", "activeInstallations", "affectedInstallationRatio", "sdkDropRate"].map((name) => [name, metric]));
+  const slice = (name: string) => ({ releaseVersion: name, state: side === name ? "UNAVAILABLE" : "PRESENT", eligibleSampleCount: 1, declaredSampleCount: 1, metrics });
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const path = requestPath(input);
+    if (path === "/v1/web/session") return json({ requestId: "session", scope, role: "viewer", expiresAtMs: Date.now() + 60_000 });
+    if (path.startsWith("/v1/query/release-health?")) return json({ requestId: "health", newRelease: slice("new"), baselineRelease: slice("baseline"), comparison: {}, trend: [] });
+    if (path.startsWith("/v1/query/data-quality?")) return json({ state: "PRESENT", releaseIdentity: { coverage: 1 }, installationIdentity: { coverage: 1 } });
+    if (path.startsWith("/v1/query/fingerprints?")) return json({ items: [] });
+    return json({}, 404);
+  });
+  const { container } = render(<App />);
+  await screen.findByRole("heading", { name: "应用总览" });
+  expect(container.querySelector(".trust-banner .state-badge")).toHaveAttribute("data-state", "UNAVAILABLE");
+  expect(screen.getByRole("status")).toHaveTextContent("没有可绘制的趋势数据");
+});

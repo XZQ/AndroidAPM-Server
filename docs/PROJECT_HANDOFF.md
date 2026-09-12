@@ -6,6 +6,8 @@
 
 1. 异常日志隐私：SQLAlchemy 隐藏参数，structlog 与 Uvicorn/stdlib 共用不含消息正文的有界异常诊断；2 项回归覆盖原始参数、SQL、驱动 cause/notes 和 ASGI 二次日志。完整门禁通过：后端 152 tests、mypy 55 files、文档 12、前端 12 tests 及 lint/typecheck/build、依赖锁同步、Ruff、diff check。Windows Temp 退出清理权限告警不影响退出码 0。
 
+2. 趋势与可信度：发布/Issue 缺失桶保留 null，发布桶区分 NO_DATA/UNAVAILABLE/观测 ZERO；Web 断开缺口并保留孤立点，可信度包含新旧版本质量门禁。30 项 Query 回归、155 项后端全测、16 项前端测试及全部静态/构建/文档门禁通过。
+
 环境边界：本轮没有 Docker/Podman/psql，未配置 PostgreSQL 集成连接。SQLite/合成数据和本机门禁不能替代 PostgreSQL、真实 R8/LLVM、Compose/SigNoz/TLS 验收。
 
 ## 2026-09-07 顺序整改

@@ -1,5 +1,7 @@
 # AndroidAPM-Server
 
+Trend buckets carry nullable counts: absent or V2-only occurrence evidence is never filled with zero. Release buckets include `newState`/`baselineState`; the console leaves gaps disconnected and shows an empty state when nothing is observable. The overview trust banner includes both releases' quality gates, including minimum installation samples.
+
 Exception logs retain only the exception type and bounded code locations. Application, worker and Uvicorn handlers omit exception messages, SQL parameters, chained causes, source lines and locals; the production SQLAlchemy engine also enables `hide_parameters=True`.
 
 The export worker executes bounded raw retention every 60 seconds (up to 1000 rows): delivered evidence after 7 days, dead letters after 30 days, and quota windows after 24 hours. Active export/symbol jobs are preserved. Minimal event/hash/HMAC-version records remain for replay protection; expired raw reads return audited `410 raw_evidence_expired`. New ingest batches exceeding 100000 live events or 10 GiB retained canonical raw bytes roll back with retryable 503; duplicate-only replay still ACKs. See ADR 0008 and migration `20260907_0005`.

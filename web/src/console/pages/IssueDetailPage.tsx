@@ -76,7 +76,7 @@ export function IssueDetailPage() {
             timestamps={detail.trend.map((point) => point.bucketStartMs)}
             series={[
               { label: "事件", color: "#52d9ba", values: detail.trend.map((point) => point.eventCount) },
-              ...(installationTrend.every((value): value is number => value !== null) ? [{ label: "影响安装", color: "#ffb84d", values: installationTrend }] : []),
+              ...(installationTrend.some((value) => value !== null) ? [{ label: "影响安装", color: "#ffb84d", values: installationTrend }] : []),
             ]}
             summary={`该 Issue 共 ${detail.eventCount} 个事件，影响 ${detail.affectedInstallationCount ?? "不可计算"} 个安装`}
           />

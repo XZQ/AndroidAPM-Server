@@ -59,6 +59,8 @@
 
 ## 数据可信契约
 
+2026-09-12：趋势按版本/时间桶核对 occurrence 证据。无事件桶返回 null + `NO_DATA`，只有批次声明返回 null + `UNAVAILABLE`；有发生时证据且未观察到 Crash/ANR 才返回观测计数 0。发布桶新增 `newState/baselineState`，Issue 无样本桶也返回 null。Web 按缺口拆线，单点单独绘制，全空显示无可绘制数据；观测计数不代表完整用户群体无事故。总览可信度同时取当前版本、基线版本和 data-quality 的限制状态，样本不足不会被较宽松的 data-quality 覆盖。
+
 | 数据族 | 来源与刷新 | 可见状态 | 缺失/失败处理 | 用户可见来源 |
 | --- | --- | --- | --- | --- |
 | 发布健康与指纹 | fixed-scope Query/BFF 从 durable inbox 按请求窗口计算；响应携带 `asOfMs` | `ZERO/NO_DATA/UNAVAILABLE/DEGRADED/LATE/ERROR` | 不复用旧数字伪装实时结果；缺 occurrence/HMAC 时隐藏结论但保留原因与已知计数 | `durable_inbox`、查询窗口、request ID |

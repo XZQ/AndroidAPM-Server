@@ -80,10 +80,12 @@ export interface ReleaseHealth {
 export interface ReleaseTrendPoint {
   bucketStartMs: number;
   bucketEndMs: number;
-  newJavaCrashEvents: number;
-  newAnrEvents: number;
-  baselineJavaCrashEvents: number;
-  baselineAnrEvents: number;
+  newJavaCrashEvents: number | null;
+  newAnrEvents: number | null;
+  baselineJavaCrashEvents: number | null;
+  baselineAnrEvents: number | null;
+  newState: QueryState;
+  baselineState: QueryState;
 }
 
 export interface FingerprintItem {
@@ -123,7 +125,7 @@ export interface IssueDistribution {
 export interface IssueTrendPoint {
   bucketStartMs: number;
   bucketEndMs: number;
-  eventCount: number;
+  eventCount: number | null;
   affectedInstallationCount: number | null;
 }
 

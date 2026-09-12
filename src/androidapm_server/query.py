@@ -125,10 +125,12 @@ class ReleaseTrendPoint(QueryModel):
 
     bucket_start_ms: int
     bucket_end_ms: int
-    new_java_crash_events: int
-    new_anr_events: int
-    baseline_java_crash_events: int
-    baseline_anr_events: int
+    new_java_crash_events: int | None
+    new_anr_events: int | None
+    baseline_java_crash_events: int | None
+    baseline_anr_events: int | None
+    new_state: str
+    baseline_state: str
 
 
 class ReleaseHealthResponse(QueryModel):
@@ -190,7 +192,7 @@ class IssueTrendPoint(QueryModel):
 
     bucket_start_ms: int
     bucket_end_ms: int
-    event_count: int
+    event_count: int | None
     affected_installation_count: int | None
 
 
@@ -633,7 +635,7 @@ def _issue_trend(
     from_ms: int,
     to_ms: int,
 ) -> list[IssueTrendPoint]:
-    """Return at most 24 explicit occurrence buckets, including real zero buckets."""
+    """Keep unobserved Issue buckets missing, rather than fabricating zero observations."""
     window_ms = to_ms - from_ms
     bucket_ms = query_bucket_ms(from_ms, to_ms)
     bucket_count = (window_ms + bucket_ms - 1) // bucket_ms
@@ -651,8 +653,10 @@ def _issue_trend(
             IssueTrendPoint(
                 bucket_start_ms=bucket_start,
                 bucket_end_ms=min(bucket_start + bucket_ms, to_ms),
-                event_count=_sample_count(group),
-                affected_installation_count=_installation_count(group, continuity_reason),
+                event_count=_sample_count(group) if group else None,
+                affected_installation_count=(
+                    _installation_count(group, continuity_reason) if group else None
+                ),
             )
         )
     return points
@@ -665,36 +669,57 @@ def _release_incident_trend(
     from_ms: int,
     to_ms: int,
 ) -> list[ReleaseTrendPoint]:
-    """Return bounded real-zero buckets for exact Crash/ANR release comparison."""
+    """Count observed incidents; a bucket needs occurrence evidence to report zero."""
     window_ms = to_ms - from_ms
     bucket_ms = query_bucket_ms(from_ms, to_ms)
     bucket_count = (window_ms + bucket_ms - 1) // bucket_ms
-    grouped: dict[int, Counter[tuple[str | None, str]]] = defaultdict(Counter)
+    grouped: dict[int, list[QueryFact]] = defaultdict(list)
     for fact in facts:
-        if not _occurrence_bound(fact) or (fact.module, fact.name) not in INCIDENT_EVENTS:
-            continue
         if fact.app_version not in {new_release, baseline_release}:
             continue
         bucket_index = (fact.occurrence_timestamp_ms - from_ms) // bucket_ms
         if 0 <= bucket_index < bucket_count:
-            grouped[bucket_index][(fact.app_version, _event_family(fact.module, fact.name))] += (
-                fact.weight
-            )
+            grouped[bucket_index].append(fact)
     points: list[ReleaseTrendPoint] = []
     for index in range(bucket_count):
-        counts = grouped[index]
+        new_java, new_anr, new_state = _bucket_incidents(grouped[index], new_release)
+        baseline_java, baseline_anr, baseline_state = _bucket_incidents(
+            grouped[index], baseline_release
+        )
         bucket_start = from_ms + index * bucket_ms
         points.append(
             ReleaseTrendPoint(
                 bucket_start_ms=bucket_start,
                 bucket_end_ms=min(bucket_start + bucket_ms, to_ms),
-                new_java_crash_events=counts[(new_release, "JAVA_CRASH")],
-                new_anr_events=counts[(new_release, "ANR")],
-                baseline_java_crash_events=counts[(baseline_release, "JAVA_CRASH")],
-                baseline_anr_events=counts[(baseline_release, "ANR")],
+                new_java_crash_events=new_java,
+                new_anr_events=new_anr,
+                baseline_java_crash_events=baseline_java,
+                baseline_anr_events=baseline_anr,
+                new_state=new_state,
+                baseline_state=baseline_state,
             )
         )
     return points
+
+
+def _bucket_incidents(facts: list[QueryFact], release: str) -> tuple[int | None, int | None, str]:
+    """Distinguish absent, declared-only and observed zero counts for one release bucket."""
+    declared = [fact for fact in facts if fact.app_version == release]
+    eligible = [fact for fact in declared if _occurrence_bound(fact)]
+    if not declared:
+        return None, None, QUERY_STATE_NO_DATA
+    if not eligible:
+        return None, None, QUERY_STATE_UNAVAILABLE
+    java = sum(
+        fact.weight for fact in eligible if (fact.module, fact.name) == ("crash", "java_crash")
+    )
+    anr = sum(
+        fact.weight for fact in eligible if (fact.module, fact.name) == ("anr", "anr_detected")
+    )
+    state = QUERY_STATE_PRESENT if java or anr else QUERY_STATE_ZERO
+    if len(eligible) < len(declared):
+        state = QUERY_STATE_DEGRADED
+    return java, anr, state
 
 
 def build_data_quality(

@@ -5,11 +5,13 @@ import { Link, useOutletContext } from "react-router-dom";
 import { getDataQuality, getFingerprints, getReleaseHealth } from "../../api";
 import { StateBadge } from "../../components/StateBadge";
 import { formatDateTime, formatPercent, shortId } from "../../format";
-import type { DataQuality, Fingerprints, ReleaseHealth } from "../../types";
+import type { DataQuality, Fingerprints, QueryState, ReleaseHealth } from "../../types";
 import type { ConsoleContextValue } from "../context";
 import { useRequestGuard } from "../useRequestGuard";
 import { ErrorPanel, LoadingPanel, MetricTile, PageHeader, SectionHeading } from "../Primitives";
 import { TrendChart } from "../TrendChart";
+
+const TRUST_STATE_ORDER: QueryState[] = ["ERROR", "UNAVAILABLE", "UNKNOWN_COVERAGE", "NO_DATA", "DEGRADED", "LATE"];
 
 export function OverviewPage() {
   const consoleContext = useOutletContext<ConsoleContextValue>();
@@ -63,7 +65,8 @@ export function OverviewPage() {
   if (error !== null && health === null) return <ErrorPanel message={error} onRetry={() => void load()} />;
   if (health === null) return null;
 
-  const riskState = quality?.state ?? health.newRelease.state;
+  const evidenceStates = [health.newRelease.state, health.baselineRelease.state, quality?.state ?? "UNAVAILABLE"];
+  const riskState = TRUST_STATE_ORDER.find((state) => evidenceStates.includes(state)) ?? "PRESENT";
   const topIssues = fingerprints?.items.slice(0, 5) ?? [];
   return (
     <div className="console-page">
@@ -108,7 +111,7 @@ export function OverviewPage() {
 
       <div className="overview-grid">
         <section className="console-panel trend-panel">
-          <SectionHeading title="Crash / ANR 发生趋势" meta={<span>最多 24 个真实零值桶</span>} />
+          <SectionHeading title="Crash / ANR 发生趋势" meta={<span>观测事件数 · 缺失数据保留空白</span>} />
           <TrendChart
             timestamps={health.trend.map((point) => point.bucketStartMs)}
             series={[

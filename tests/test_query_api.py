@@ -228,9 +228,26 @@ async def test_release_health_uses_exact_occurrence_events_and_explicit_states(
     }
     assert body["baselineRelease"]["metrics"]["javaCrashEvents"]["value"] == 1
     assert body["comparison"]["javaCrashEventDelta"] == 1
-    assert sum(point["newJavaCrashEvents"] for point in body["trend"]) == 2
-    assert sum(point["newAnrEvents"] for point in body["trend"]) == 1
-    assert sum(point["baselineJavaCrashEvents"] for point in body["trend"]) == 1
+    assert (
+        sum(
+            point["newJavaCrashEvents"]
+            for point in body["trend"]
+            if point["newJavaCrashEvents"] is not None
+        )
+        == 2
+    )
+    assert (
+        sum(point["newAnrEvents"] for point in body["trend"] if point["newAnrEvents"] is not None)
+        == 1
+    )
+    assert (
+        sum(
+            point["baselineJavaCrashEvents"]
+            for point in body["trend"]
+            if point["baselineJavaCrashEvents"] is not None
+        )
+        == 1
+    )
     assert len(body["trend"]) <= 24
     assert response.headers["cache-control"] == "private, no-store"
 
@@ -332,7 +349,9 @@ async def test_issue_detail_aggregates_trend_and_only_supported_dimensions(
     assert body["eventFamily"] == "JAVA_CRASH"
     assert body["eventCount"] == 2
     assert body["affectedInstallationCount"] == 2
-    assert sum(point["eventCount"] for point in body["trend"]) == 2
+    assert (
+        sum(point["eventCount"] for point in body["trend"] if point["eventCount"] is not None) == 2
+    )
     assert len(body["trend"]) <= 24
     assert body["releases"]["items"] == [
         {"label": "2.0.0", "eventCount": 2, "affectedInstallationCount": 2}
@@ -620,7 +639,14 @@ async def test_sql_reduction_counts_more_events_than_the_projection_budget(
     assert body["newRelease"]["eligibleSampleCount"] == 500
     assert body["newRelease"]["metrics"]["javaCrashEvents"]["value"] == 500
     assert body["newRelease"]["metrics"]["activeInstallations"]["value"] == 1
-    assert sum(point["newJavaCrashEvents"] for point in body["trend"]) == 500
+    assert (
+        sum(
+            point["newJavaCrashEvents"]
+            for point in body["trend"]
+            if point["newJavaCrashEvents"] is not None
+        )
+        == 500
+    )
     quality = await client.get(
         "/v1/query/data-quality",
         headers=auth(credentials["viewer-a"]),

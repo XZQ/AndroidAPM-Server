@@ -106,6 +106,40 @@ def test_complete_healthy_sample_can_report_real_zero() -> None:
     assert result.new_release.metrics.affected_installation_ratio.value == 0
 
 
+@pytest.mark.parametrize("declared_only", [False, True])
+def test_missing_release_trends_never_fabricate_zero(declared_only: bool) -> None:
+    facts = (
+        [fact(release_identity_quality="BATCH_DECLARED", schema_version="2")]
+        if declared_only
+        else []
+    )
+    result = build_release_health("r", PRINCIPAL, facts, "new", "old", TIME - 1, TIME + 1, 1000)
+    assert result.new_release.metrics.java_crash_events.value is None
+    assert result.trend[0].new_java_crash_events is None
+    assert result.trend[0].new_anr_events is None
+    assert result.trend[0].new_state == ("UNAVAILABLE" if declared_only else "NO_DATA")
+    assert result.trend[0].baseline_java_crash_events is None
+    assert result.trend[0].baseline_state == "NO_DATA"
+
+
+def test_release_trend_preserves_observed_zero_missing_bucket_and_incident_count() -> None:
+    facts = [
+        fact(occurrence_timestamp_ms=TIME - 120_000),
+        fact(module="crash", name="java_crash", weight=3),
+    ]
+    result = build_release_health(
+        "r", PRINCIPAL, facts, "new", "old", TIME - 120_000, TIME + 60_000, 1000
+    )
+    assert [point.new_java_crash_events for point in result.trend] == [0, None, 3]
+    assert [point.new_state for point in result.trend] == ["ZERO", "NO_DATA", "PRESENT"]
+    assert all(point.baseline_java_crash_events is None for point in result.trend)
+    issue = build_issue_detail("r", PRINCIPAL, [], "missing", TIME - 120_000, TIME + 60_000)
+    assert all(
+        point.event_count is None and point.affected_installation_count is None
+        for point in issue.trend
+    )
+
+
 @pytest.mark.parametrize("different_release", [False, True])
 def test_rotated_hmac_does_not_double_count_or_compare_distinct_epochs(
     different_release: bool,
