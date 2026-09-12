@@ -19,7 +19,8 @@ from androidapm_server.config import get_settings
 def get_engine() -> AsyncEngine:
     """Create the process-wide async SQLAlchemy engine."""
     database_url = get_settings().database_url.get_secret_value()
-    return create_async_engine(database_url, pool_pre_ping=True)
+    # SQL exceptions must not render bound raw telemetry or credential parameters.
+    return create_async_engine(database_url, pool_pre_ping=True, hide_parameters=True)
 
 
 @lru_cache(maxsize=1)

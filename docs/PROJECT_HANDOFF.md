@@ -1,6 +1,12 @@
 # AndroidAPM-Server 项目交接
 
-> 当前验证基线：2026-09-07，分支 `codex/server-foundation`。本文区分“本机已验证”和“需要外部环境验证”，不能把后者改写成已完成。
+> 当前验证基线：2026-09-12，分支 `codex/server-foundation`。本文区分“本机已验证”和“需要外部环境验证”，不能把后者改写成已完成。
+
+## 2026-09-12 顺序整改
+
+1. 异常日志隐私：SQLAlchemy 隐藏参数，structlog 与 Uvicorn/stdlib 共用不含消息正文的有界异常诊断；2 项回归覆盖原始参数、SQL、驱动 cause/notes 和 ASGI 二次日志。完整门禁通过：后端 152 tests、mypy 55 files、文档 12、前端 12 tests 及 lint/typecheck/build、依赖锁同步、Ruff、diff check。Windows Temp 退出清理权限告警不影响退出码 0。
+
+环境边界：本轮没有 Docker/Podman/psql，未配置 PostgreSQL 集成连接。SQLite/合成数据和本机门禁不能替代 PostgreSQL、真实 R8/LLVM、Compose/SigNoz/TLS 验收。
 
 ## 2026-09-07 顺序整改
 
