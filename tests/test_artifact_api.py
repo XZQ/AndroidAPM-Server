@@ -28,9 +28,7 @@ MAPPING = b"com.example.RealClass -> a:\n    1:1:void run():10:10 -> a\n"
 @pytest_asyncio.fixture
 async def artifact_api(
     tmp_path: Path,
-) -> AsyncIterator[
-    tuple[AsyncClient, async_sessionmaker[AsyncSession], str, str, Path]
-]:
+) -> AsyncIterator[tuple[AsyncClient, async_sessionmaker[AsyncSession], str, str, Path]]:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -92,6 +90,22 @@ def artifact_headers(key: str, content: bytes, *, native: bool = False) -> dict[
         headers["X-APM-ABI"] = "arm64-v8a"
         headers["X-APM-Build-Id"] = "0123456789abcdef"
     return headers
+
+
+async def test_mapping_identity_accepts_protocol_width(
+    artifact_api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str, str, Path],
+) -> None:
+    client, _factory, key, _ingest_key, _root = artifact_api
+    headers = artifact_headers(key, MAPPING)
+    headers.update({"X-APM-App-Build": "b" * 256, "X-APM-Variant": "r" * 256})
+    response = await client.post("/v1/artifacts/java-mapping", headers=headers, content=MAPPING)
+    assert response.status_code == 200
+    replay = await client.post("/v1/artifacts/java-mapping", headers=headers, content=MAPPING)
+    assert replay.json()["duplicate"] is True
+    headers["X-APM-App-Build"] += "b"
+    assert (
+        await client.post("/v1/artifacts/java-mapping", headers=headers, content=MAPPING)
+    ).status_code == 400
 
 
 @pytest.mark.asyncio

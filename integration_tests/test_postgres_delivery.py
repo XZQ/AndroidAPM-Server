@@ -17,7 +17,7 @@ from androidapm_server.artifacts import ArtifactIdentity, StagedArtifact, inspec
 from androidapm_server.constants import ARTIFACT_TYPE_JAVA_MAPPING
 from androidapm_server.db.artifacts import register_artifact
 from androidapm_server.db.inbox import insert_batch
-from androidapm_server.db.models import InboxEvent, SymbolArtifact, Tenant
+from androidapm_server.db.models import InboxEvent, ReleaseDecision, SymbolArtifact, Tenant
 from androidapm_server.db.worker import claim_batch
 from androidapm_server.domain import ApmEvent, IngestMetadata
 from androidapm_server.errors import ApiError
@@ -77,6 +77,65 @@ def metadata(tenant_id: str, request_id: str) -> IngestMetadata:
     )
 
 
+async def test_postgres_accepts_full_protocol_release_identity(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    tenant = f"width-{uuid.uuid4().hex}"
+    value = "v" * 256
+    try:
+        async with factory() as session:
+            session.add(Tenant(id=tenant, name="Synthetic width"))
+            await session.flush()
+            meta = metadata(tenant, "width").model_copy(
+                update={"app_version": value, "app_build": value, "variant": value}
+            )
+            await insert_batch(session, meta, [event("width")])
+            session.add(
+                SymbolArtifact(
+                    tenant_id=tenant,
+                    artifact_type=ARTIFACT_TYPE_JAVA_MAPPING,
+                    app_id=meta.app_id,
+                    version_code="42",
+                    app_build=value,
+                    variant=value,
+                    abi="",
+                    build_id="",
+                    checksum_sha256="a" * 64,
+                    size_bytes=1,
+                    storage_key="synthetic-width",
+                    uploaded_by="test",
+                )
+            )
+            session.add(
+                ReleaseDecision(
+                    tenant_id=tenant,
+                    app_id=meta.app_id,
+                    environment=meta.environment,
+                    release_version=value,
+                    decision="continue",
+                    actor="test",
+                    evidence_from_ms=1,
+                    evidence_to_ms=2,
+                    reason="synthetic width test",
+                    evidence_json={},
+                )
+            )
+            await session.commit()
+        async with factory() as session:
+            row = await session.scalar(select(InboxEvent).where(InboxEvent.tenant_id == tenant))
+            assert row is not None and (row.app_version, row.app_build, row.variant) == (
+                value,
+                value,
+                value,
+            )
+    finally:
+        async with factory() as session:
+            for model in (ReleaseDecision, SymbolArtifact, InboxEvent):
+                await session.execute(delete(model).where(model.tenant_id == tenant))
+            await session.execute(delete(Tenant).where(Tenant.id == tenant))
+            await session.commit()
+
+
 @pytest.mark.asyncio
 async def test_concurrent_artifact_identity_has_one_fact_and_detects_conflict(
     factory: async_sessionmaker[AsyncSession],
@@ -112,9 +171,9 @@ async def test_concurrent_artifact_identity_has_one_fact_and_detects_conflict(
     assert conflict == (False, True)
     async with factory() as session:
         count = await session.scalar(
-            select(func.count()).select_from(SymbolArtifact).where(
-                SymbolArtifact.tenant_id == tenant_id
-            )
+            select(func.count())
+            .select_from(SymbolArtifact)
+            .where(SymbolArtifact.tenant_id == tenant_id)
         )
         await session.execute(delete(SymbolArtifact).where(SymbolArtifact.tenant_id == tenant_id))
         await session.execute(delete(Tenant).where(Tenant.id == tenant_id))

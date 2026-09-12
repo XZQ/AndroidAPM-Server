@@ -211,6 +211,45 @@ def v3_request(
     )
 
 
+@pytest.mark.parametrize("length", [129, 256, 257])
+async def test_v3_release_identity_bounds_and_exact_ack(
+    api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str],
+    length: int,
+) -> None:
+    client, factory, key = api
+    request_headers, content = v3_request(key, occurrence_version="v" * length)
+    envelope = ApmBatchEnvelope.FromString(content)
+    envelope.events[0].occurrence.app_build = "b" * length
+    envelope.events[0].occurrence.variant = "r" * length
+    if length <= 256:
+        request_headers.update(
+            {
+                "X-Apm-App-Version": "v" * length,
+                "X-Apm-App-Build": "b" * length,
+                "X-Apm-Variant": "r" * length,
+            }
+        )
+    response = await client.post(
+        "/v1/events", headers=request_headers, content=envelope.SerializeToString()
+    )
+    if length > 256:
+        assert response.status_code == 422
+        assert "X-Apm-Batch-Id" not in response.headers
+        async with factory() as session:
+            assert await session.scalar(select(func.count()).select_from(InboxEvent)) == 0
+    else:
+        assert response.status_code == 200
+        assert response.headers["X-Apm-Batch-Id"] == envelope.batch_id
+        async with factory() as session:
+            row = await session.scalar(select(InboxEvent))
+            assert row is not None
+            assert (row.app_version, row.app_build, row.variant) == (
+                "v" * length,
+                "b" * length,
+                "r" * length,
+            )
+
+
 @pytest.mark.asyncio
 async def test_success_means_durable_insert_and_replay_is_duplicate(
     api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str],

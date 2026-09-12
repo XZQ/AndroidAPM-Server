@@ -1,5 +1,7 @@
 # SDK ↔ Collector 协议
 
+2026-09-12：serviceVersion/appBuild/variant 继续支持 1–256 UTF-8 bytes。迁移 `20260912_0006` 将 inbox、symbol artifact 和 release decision 相应字段扩宽为 VARCHAR(256)，接收 header、制品 header、Query 过滤和发布决策同步使用 256-byte 校验。先迁移再更新服务；已有超过 128 字符的值会阻止缩窄迁移，禁止截断身份。SDK 协议和发生时快照不变，超出 256 bytes 的事件仍整批拒绝并不给成功 ACK。
+
 ## v1 接口
 
 ```http

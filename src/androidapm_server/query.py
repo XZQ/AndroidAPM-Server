@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from androidapm_server.constants import (
+    MAX_IDENTIFIER_BYTES,
     QUERY_STATE_DEGRADED,
     QUERY_STATE_LATE,
     QUERY_STATE_NO_DATA,
@@ -329,7 +330,7 @@ class ReleaseEvidence(QueryModel):
 class ReleaseDecisionRequest(QueryModel):
     """Human-owned release action with a bounded evidence window and rationale."""
 
-    release_version: str = Field(min_length=1, max_length=128)
+    release_version: str = Field(min_length=1, max_length=MAX_IDENTIFIER_BYTES)
     decision: str = Field(min_length=1, max_length=32)
     evidence_from_ms: int = Field(gt=0)
     evidence_to_ms: int = Field(gt=0)

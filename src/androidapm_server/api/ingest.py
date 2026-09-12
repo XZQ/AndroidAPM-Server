@@ -26,6 +26,7 @@ from androidapm_server.constants import (
     HEADER_VERSION_CODE,
     LINE_CONTENT_TYPE,
     MAX_EVENT_JSON_BYTES,
+    MAX_IDENTIFIER_BYTES,
     PROTOBUF_CONTENT_TYPE,
     PROTOBUF_ENVELOPE_V2_CONTENT_TYPE,
     PROTOBUF_ENVELOPE_V3_CONTENT_TYPE,
@@ -134,7 +135,7 @@ async def ingest_events(
                 "invalid_request",
                 "The environment header does not match the V2 resource",
             )
-        app_version = _optional_header(request, HEADER_APP_VERSION, 128)
+        app_version = _optional_header(request, HEADER_APP_VERSION, MAX_IDENTIFIER_BYTES)
         if app_version is not None and app_version != envelope_v2.service_version:
             raise ApiError(
                 400,
@@ -171,7 +172,7 @@ async def ingest_events(
             )
         events = envelope_v3.events
         # Batch declarations remain diagnostic only; insert_batch selects each event occurrence.
-        app_version = _optional_header(request, HEADER_APP_VERSION, 128)
+        app_version = _optional_header(request, HEADER_APP_VERSION, MAX_IDENTIFIER_BYTES)
         release_quality = IdentityQuality.OCCURRENCE_BOUND
         installation_quality = IdentityQuality.OCCURRENCE_BOUND
         installation_id = None
@@ -184,7 +185,7 @@ async def ingest_events(
             settings.max_batch_events,
             MAX_EVENT_JSON_BYTES,
         )
-        app_version = _optional_header(request, HEADER_APP_VERSION, 128)
+        app_version = _optional_header(request, HEADER_APP_VERSION, MAX_IDENTIFIER_BYTES)
         release_quality = (
             IdentityQuality.REQUEST_DECLARED if app_version is not None else IdentityQuality.ABSENT
         )
@@ -202,9 +203,9 @@ async def ingest_events(
         schema_version=schema_version,
         sdk_version=sdk_version,
         app_version=app_version,
-        app_build=_optional_header(request, HEADER_APP_BUILD, 128),
+        app_build=_optional_header(request, HEADER_APP_BUILD, MAX_IDENTIFIER_BYTES),
         version_code=_optional_header(request, HEADER_VERSION_CODE, 64),
-        variant=_optional_header(request, HEADER_VARIANT, 128),
+        variant=_optional_header(request, HEADER_VARIANT, MAX_IDENTIFIER_BYTES),
         protocol=protocol_label,
         release_identity_quality=release_quality,
         installation_identity_quality=installation_quality,

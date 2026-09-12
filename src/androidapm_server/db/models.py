@@ -25,6 +25,7 @@ from androidapm_server.constants import (
     IDENTITY_QUALITY_ABSENT,
     IDENTITY_QUALITY_AUTHENTICATED,
     INBOX_STATUS_PENDING,
+    MAX_IDENTIFIER_BYTES,
     NORMALIZATION_VERSION,
     SYMBOL_STATUS_PENDING,
     TIMESTAMP_QUALITY_EVENT_DECLARED,
@@ -174,10 +175,10 @@ class InboxEvent(Base):
     environment: Mapped[str] = mapped_column(String(128), nullable=False)
     schema_version: Mapped[str] = mapped_column(String(32), nullable=False)
     sdk_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    app_version: Mapped[str | None] = mapped_column(String(128))
-    app_build: Mapped[str | None] = mapped_column(String(128))
+    app_version: Mapped[str | None] = mapped_column(String(MAX_IDENTIFIER_BYTES))
+    app_build: Mapped[str | None] = mapped_column(String(MAX_IDENTIFIER_BYTES))
     version_code: Mapped[str | None] = mapped_column(String(64))
-    variant: Mapped[str | None] = mapped_column(String(128))
+    variant: Mapped[str | None] = mapped_column(String(MAX_IDENTIFIER_BYTES))
     protocol: Mapped[str] = mapped_column(String(64), nullable=False)
     scope_identity_quality: Mapped[str] = mapped_column(
         String(32), nullable=False, default=IDENTITY_QUALITY_AUTHENTICATED
@@ -250,8 +251,8 @@ class SymbolArtifact(Base):
     artifact_type: Mapped[str] = mapped_column(String(32), nullable=False)
     app_id: Mapped[str] = mapped_column(String(256), nullable=False)
     version_code: Mapped[str] = mapped_column(String(64), nullable=False)
-    app_build: Mapped[str] = mapped_column(String(128), nullable=False)
-    variant: Mapped[str] = mapped_column(String(128), nullable=False)
+    app_build: Mapped[str] = mapped_column(String(MAX_IDENTIFIER_BYTES), nullable=False)
+    variant: Mapped[str] = mapped_column(String(MAX_IDENTIFIER_BYTES), nullable=False)
     abi: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     build_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -394,7 +395,7 @@ class ReleaseDecision(Base):
     tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
     app_id: Mapped[str] = mapped_column(String(256), nullable=False)
     environment: Mapped[str] = mapped_column(String(128), nullable=False)
-    release_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    release_version: Mapped[str] = mapped_column(String(MAX_IDENTIFIER_BYTES), nullable=False)
     decision: Mapped[str] = mapped_column(String(32), nullable=False)
     actor: Mapped[str] = mapped_column(String(256), nullable=False)
     evidence_from_ms: Mapped[int] = mapped_column(BIGINT_PRIMARY_KEY, nullable=False)

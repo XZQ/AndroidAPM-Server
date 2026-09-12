@@ -1,5 +1,7 @@
 # AndroidAPM-Server
 
+Migration `20260912_0006` widens release/build/variant storage to match the existing 256-byte SDK protocol, including symbol identities and human release decisions. Apply migrations before rolling out this version; a downgrade refuses to narrow columns while values longer than 128 characters exist. Ingest headers, artifact uploads and query filters share the same 256-byte limit.
+
 Trend buckets carry nullable counts: absent or V2-only occurrence evidence is never filled with zero. Release buckets include `newState`/`baselineState`; the console leaves gaps disconnected and shows an empty state when nothing is observable. The overview trust banner includes both releases' quality gates, including minimum installation samples.
 
 Exception logs retain only the exception type and bounded code locations. Application, worker and Uvicorn handlers omit exception messages, SQL parameters, chained causes, source lines and locals; the production SQLAlchemy engine also enables `hide_parameters=True`.

@@ -30,6 +30,7 @@ from androidapm_server.constants import (
     HEADER_CHECKSUM_SHA256,
     HEADER_VARIANT,
     HEADER_VERSION_CODE,
+    MAX_IDENTIFIER_BYTES,
 )
 from androidapm_server.db.artifacts import register_artifact
 from androidapm_server.db.models import AuditLog
@@ -85,8 +86,8 @@ async def _upload(
     """Authenticate before body reads, stage bytes, validate, promote, and register."""
     app_id = _required_header(request, HEADER_APP_ID, 256)
     version_code = _required_header(request, HEADER_VERSION_CODE, 64)
-    app_build = _required_header(request, HEADER_APP_BUILD, 128)
-    variant = _required_header(request, HEADER_VARIANT, 128)
+    app_build = _required_header(request, HEADER_APP_BUILD, MAX_IDENTIFIER_BYTES)
+    variant = _required_header(request, HEADER_VARIANT, MAX_IDENTIFIER_BYTES)
     expected_checksum = _required_header(request, HEADER_CHECKSUM_SHA256, 64).lower()
     if not SHA256_PATTERN.fullmatch(expected_checksum):
         raise ApiError(400, "invalid_checksum", "The expected SHA-256 is invalid")
@@ -154,9 +155,7 @@ async def _upload(
     )
     storage_key = identity.storage_key(staged.checksum_sha256, extension)
     promoted = await store.promote(staged, storage_key)
-    registration = await register_artifact(
-        session, identity, staged, storage_key, principal.key_id
-    )
+    registration = await register_artifact(session, identity, staged, storage_key, principal.key_id)
     request_id = request.state.request_id
     if registration.conflict:
         # A different checksum uses a different immutable path and is safe to discard.

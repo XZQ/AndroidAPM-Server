@@ -419,6 +419,44 @@ async def test_viewer_cannot_read_l1_l2_or_write_release_decisions(
     assert decision.status_code == 403
 
 
+@pytest.mark.parametrize("release", ["v" * 256, "版" * 85 + "a"])
+async def test_full_width_release_can_be_queried_and_recorded(
+    query_api: tuple[
+        AsyncClient, async_sessionmaker[AsyncSession], dict[str, str], InstallationHmacKeyRing
+    ],
+    release: str,
+) -> None:
+    client, _factory, credentials, _keys = query_api
+    headers = auth(credentials["investigator-a"])
+    health = await client.get(
+        "/v1/query/release-health",
+        headers=headers,
+        params=window_params(newRelease=release, baselineRelease="baseline"),
+    )
+    assert health.status_code == 200
+    assert health.json()["newRelease"]["releaseVersion"] == release
+    for endpoint in ("fingerprints", "data-quality", "events"):
+        response = await client.get(
+            f"/v1/query/{endpoint}", headers=headers, params=window_params(releaseVersion=release)
+        )
+        assert response.status_code == 200
+    body = _decision_body()
+    body["releaseVersion"] = release
+    decision = await client.post("/v1/query/release-decisions", headers=headers, json=body)
+    assert decision.status_code == 201
+    assert decision.json()["releaseVersion"] == release
+    listed = await client.get(
+        "/v1/query/release-decisions", headers=headers, params={"releaseVersion": release}
+    )
+    assert listed.status_code == 200 and listed.json()["items"][0]["releaseVersion"] == release
+    rejected = await client.get(
+        "/v1/query/fingerprints",
+        headers=headers,
+        params=window_params(releaseVersion=release + "a"),
+    )
+    assert rejected.status_code == 400
+
+
 @pytest.mark.asyncio
 async def test_event_pagination_is_allow_listed_audited_and_filter_bound(
     query_api: tuple[

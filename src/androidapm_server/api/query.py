@@ -9,7 +9,11 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from androidapm_server.config import Settings, get_settings
-from androidapm_server.constants import QUERY_RAW_PURPOSES, QUERY_RELEASE_DECISIONS
+from androidapm_server.constants import (
+    MAX_IDENTIFIER_BYTES,
+    QUERY_RAW_PURPOSES,
+    QUERY_RELEASE_DECISIONS,
+)
 from androidapm_server.db.models import AuditLog, ReleaseDecision
 from androidapm_server.db.query import (
     get_scoped_event,
@@ -72,8 +76,10 @@ async def get_release_health(
     _reject_scope_parameters(request)
     principal = await authenticate_query_request(session, request, settings)
     _validate_window(from_ms, to_ms, settings)
-    new_release = _validate_identifier(new_release, "newRelease", 128)
-    baseline_release = _validate_identifier(baseline_release, "baselineRelease", 128)
+    new_release = _validate_identifier(new_release, "newRelease", MAX_IDENTIFIER_BYTES)
+    baseline_release = _validate_identifier(
+        baseline_release, "baselineRelease", MAX_IDENTIFIER_BYTES
+    )
     if new_release == baseline_release:
         raise ApiError(400, "invalid_release_comparison", "The two releases must be different")
     facts = await load_window_facts(
@@ -115,7 +121,7 @@ async def get_top_fingerprints(
     _reject_scope_parameters(request)
     principal = await authenticate_query_request(session, request, settings)
     _validate_window(from_ms, to_ms, settings)
-    release_version = _validate_identifier(release_version, "releaseVersion", 128)
+    release_version = _validate_identifier(release_version, "releaseVersion", MAX_IDENTIFIER_BYTES)
     _validate_limit(limit, settings)
     facts = await load_window_facts(
         session,
@@ -190,7 +196,9 @@ async def get_data_quality(
     principal = await authenticate_query_request(session, request, settings)
     _validate_window(from_ms, to_ms, settings)
     if release_version is not None:
-        release_version = _validate_identifier(release_version, "releaseVersion", 128)
+        release_version = _validate_identifier(
+            release_version, "releaseVersion", MAX_IDENTIFIER_BYTES
+        )
     facts = await load_window_facts(
         session,
         principal,
@@ -233,7 +241,7 @@ async def get_events(
     require_investigator(principal)
     _validate_window(from_ms, to_ms, settings)
     _validate_limit(limit, settings)
-    release_version = _optional_identifier(release_version, "releaseVersion", 128)
+    release_version = _optional_identifier(release_version, "releaseVersion", MAX_IDENTIFIER_BYTES)
     module = _optional_identifier(module, "module", 256)
     name = _optional_identifier(name, "name", 256)
     fingerprint = _optional_fingerprint(fingerprint)
@@ -400,7 +408,9 @@ async def create_release_decision(
     if decision.decision not in QUERY_RELEASE_DECISIONS:
         raise ApiError(400, "invalid_release_decision", "The release decision is invalid")
     _validate_window(decision.evidence_from_ms, decision.evidence_to_ms, settings)
-    release_version = _validate_identifier(decision.release_version, "releaseVersion", 128)
+    release_version = _validate_identifier(
+        decision.release_version, "releaseVersion", MAX_IDENTIFIER_BYTES
+    )
     actor = f"query-key:{principal.key_id}"
     stored = ReleaseDecision(
         tenant_id=principal.tenant_id,
@@ -450,7 +460,7 @@ async def get_release_decisions(
     _reject_scope_parameters(request)
     principal = await authenticate_query_request(session, request, settings)
     require_investigator(principal)
-    release_version = _optional_identifier(release_version, "releaseVersion", 128)
+    release_version = _optional_identifier(release_version, "releaseVersion", MAX_IDENTIFIER_BYTES)
     _validate_limit(limit, settings)
     decisions = await list_release_decisions(session, principal, release_version, limit)
     _no_store(response)
