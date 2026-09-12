@@ -46,6 +46,34 @@ def fact(**changes: object) -> QueryFact:
 
 
 @pytest.mark.parametrize(
+    ("scene_state", "reason", "counter"),
+    [
+        ("EXPIRED", "SCENE_EVIDENCE_EXPIRED", "expired_event_count"),
+        ("MISSING", "SCENE_NOT_PROVIDED", "missing_event_count"),
+        ("RETENTION_UNKNOWN", "SCENE_RETENTION_UNKNOWN", "retention_unknown_event_count"),
+    ],
+)
+def test_entirely_unavailable_scene_uses_its_actual_evidence_state(
+    scene_state: str, reason: str, counter: str
+) -> None:
+    facts = [
+        fact(
+            module="crash",
+            name="java_crash",
+            incident_fingerprint="f" * 64,
+            scene_state=scene_state,
+            weight=7,
+        )
+    ]
+    detail = build_issue_detail("r", PRINCIPAL, facts, "f" * 64, TIME - 1, TIME + 1)
+    assert detail.event_count == 7
+    assert detail.scenes.state == "UNAVAILABLE" and detail.scenes.reason == reason
+    assert detail.scenes.items == [] and detail.scenes.coverage is not None
+    assert detail.scenes.coverage.total_event_count == 7
+    assert getattr(detail.scenes.coverage, counter) == 7
+
+
+@pytest.mark.parametrize(
     "changes",
     [
         {"sdk_drop_rate": None},

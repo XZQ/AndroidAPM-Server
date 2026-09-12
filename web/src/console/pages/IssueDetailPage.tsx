@@ -126,25 +126,43 @@ function SummaryFact({ label, value }: { label: string; value: string }) {
   return <div><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function DistributionView({ distribution }: { distribution: IssueDistribution }) {
+export function DistributionView({ distribution }: { distribution: IssueDistribution }) {
+  const coverage = distribution.coverage;
+  const coverageNote = coverage ? (
+    <p className="distribution-coverage">
+      {distribution.dimension === "scene" ? "场景证据" : "维度证据"}可用 {coverage.availableEventCount} / {coverage.totalEventCount} 事件
+      <br />
+      未提供 {coverage.missingEventCount} · 已过期 {coverage.expiredEventCount} · 历史状态未知 {coverage.retentionUnknownEventCount}
+    </p>
+  ) : null;
   if (distribution.state === "UNKNOWN_COVERAGE" || distribution.state === "UNAVAILABLE") {
     return (
       <div className="distribution-unavailable">
         <Layers3 size={23} aria-hidden="true" />
         <StateBadge state={distribution.state} />
         <p>{reasonLabel(distribution.reason) ?? distribution.reason ?? "该维度当前不可用"}</p>
+        {coverageNote}
       </div>
     );
   }
   const max = Math.max(1, ...distribution.items.map((item) => item.eventCount));
   return (
-    <div className="distribution-list">
-      {distribution.items.map((item) => (
-        <div key={item.label}>
-          <span>{item.label}</span><strong>{item.eventCount} 事件</strong><small>{item.affectedInstallationCount ?? "—"} 安装</small>
-          <i><b style={{ width: `${(item.eventCount / max) * 100}%` }} /></i>
+    <>
+      {distribution.state === "DEGRADED" ? (
+        <div className="distribution-warning">
+          <StateBadge state={distribution.state} />
+          <p>{reasonLabel(distribution.reason)}</p>
         </div>
-      ))}
-    </div>
+      ) : null}
+      {coverageNote}
+      <div className="distribution-list">
+        {distribution.items.map((item) => (
+          <div key={item.label}>
+            <span>{item.label}</span><strong>{item.eventCount} 事件</strong><small>{item.affectedInstallationCount ?? "—"} 安装</small>
+            <i><b style={{ width: `${(item.eventCount / max) * 100}%` }} /></i>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }

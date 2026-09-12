@@ -13,6 +13,12 @@ from sqlalchemy.engine import Result, RowMapping
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from androidapm_server.constants import (
+    EVIDENCE_AVAILABLE,
+    EVIDENCE_EXPIRED,
+    EVIDENCE_MISSING,
+    EVIDENCE_RETENTION_UNKNOWN,
+)
 from androidapm_server.db.models import InboxEvent, ReleaseDecision
 from androidapm_server.errors import ApiError
 from androidapm_server.query_auth import QueryPrincipal
@@ -46,6 +52,7 @@ class QueryFact:
     weight: int = 1
     last_occurrence_timestamp_ms: int | None = None
     late: bool | None = None
+    scene_state: str | None = None
 
 
 async def resolve_issue_fingerprint(
@@ -114,6 +121,25 @@ async def load_window_facts(
         ),
         Integer,
     )
+    scene = case(
+        (InboxEvent.raw_pruned_at.is_(None), InboxEvent.payload_json["scene"].as_string()),
+        else_=None,
+    )
+    retained_scene_state = InboxEvent.normalized_json["retention"]["scene_state"].as_string()
+    scene_state = case(
+        (
+            InboxEvent.raw_pruned_at.is_not(None),
+            case(
+                (
+                    retained_scene_state.in_((EVIDENCE_EXPIRED, EVIDENCE_MISSING)),
+                    retained_scene_state,
+                ),
+                else_=EVIDENCE_RETENTION_UNKNOWN,
+            ),
+        ),
+        (and_(scene.is_not(None), scene != ""), EVIDENCE_AVAILABLE),
+        else_=EVIDENCE_MISSING,
+    )
     dimensions = [
         InboxEvent.app_version.label("app_version"),
         InboxEvent.release_identity_quality.label("release_identity_quality"),
@@ -126,7 +152,8 @@ async def load_window_facts(
         InboxEvent.status.label("inbox_status"),
         InboxEvent.payload_json["module"].as_string().label("module"),
         InboxEvent.payload_json["name"].as_string().label("name"),
-        InboxEvent.payload_json["scene"].as_string().label("scene"),
+        scene.label("scene"),
+        scene_state.label("scene_state"),
         valid_health.label("sdk_emit_count"),
         late.label("late"),
         bucket.label("bucket"),
@@ -275,6 +302,7 @@ def _fact_from_mapping(row: RowMapping) -> QueryFact:
         module=cast(str | None, row["module"]) or "",
         name=cast(str | None, row["name"]) or "",
         scene=cast(str | None, row["scene"]),
+        scene_state=cast(str, row["scene_state"]),
         sdk_drop_count=_optional_int(row["sdk_drop_count"]),
         sdk_drop_rate=_optional_float(row["sdk_drop_rate"]),
         sdk_emit_count=_optional_int(row["sdk_emit_count"]),

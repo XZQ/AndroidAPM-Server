@@ -59,6 +59,8 @@
 
 ## 数据可信契约
 
+2026-09-12 保留期修复：场景值随 raw TTL 清理，仅保留“曾提供/未提供”状态，不延长任意场景字符串寿命。Issue 分布新增 `coverage`，按 SQL 聚合权重返回 `totalEventCount/availableEventCount/missingEventCount/expiredEventCount/retentionUnknownEventCount`；部分可用显示 `DEGRADED` 和真实剩余分布，全不可用显示 `UNAVAILABLE`。过期原因是 `SCENE_EVIDENCE_EXPIRED`；历史清理没有状态凭据时使用 `SCENE_RETENTION_UNKNOWN`，不声称客户端未提供。版本和事件计数保持原观察值；top-10 条目不代表其余场景不存在，coverage 统计完整窗口。事件元数据中被清理的原 AVAILABLE 字段改为 `EXPIRED`；保留的数值及原 INVALID/MISSING 不变。
+
 2026-09-12：趋势按版本/时间桶核对 occurrence 证据。无事件桶返回 null + `NO_DATA`，只有批次声明返回 null + `UNAVAILABLE`；有发生时证据且未观察到 Crash/ANR 才返回观测计数 0。发布桶新增 `newState/baselineState`，Issue 无样本桶也返回 null。Web 按缺口拆线，单点单独绘制，全空显示无可绘制数据；观测计数不代表完整用户群体无事故。总览可信度同时取当前版本、基线版本和 data-quality 的限制状态，样本不足不会被较宽松的 data-quality 覆盖。
 
 | 数据族 | 来源与刷新 | 可见状态 | 缺失/失败处理 | 用户可见来源 |

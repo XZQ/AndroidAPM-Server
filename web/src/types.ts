@@ -120,6 +120,13 @@ export interface IssueDistribution {
   state: QueryState;
   reason: string | null;
   items: IssueDistributionItem[];
+  coverage?: {
+    totalEventCount: number;
+    availableEventCount: number;
+    missingEventCount: number;
+    expiredEventCount: number;
+    retentionUnknownEventCount: number;
+  } | null;
 }
 
 export interface IssueTrendPoint {

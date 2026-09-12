@@ -21,23 +21,24 @@ This is the repository-local handoff entry for AndroidAPM-Server. Source code, m
 13. `docs/adr/0006-发生时身份与installation假名化.md`
 14. `docs/adr/0007-同源Web控制台与短时会话.md`
 15. `docs/adr/0008-保留策略与容量准入.md`
+16. `docs/adr/0009-符号化Issue指纹与旧链接.md`
 
 ## Current verified baseline
 
-- Baseline date: `2026-09-07`
+- Baseline date: `2026-09-12`
 - Branch: `codex/server-foundation`
 - Runtime: Python `3.11.15`, FastAPI `0.139.0`, SQLAlchemy `2.0.51`
 - Persistence: PostgreSQL production model; SQLite is used only for fast compatibility tests
 - Telemetry target: OTLP/HTTP Logs to SigNoz `v0.133.0`, installation method pinned to Foundry `v0.2.13`; deployment remains unverified
-- Schema: append-only Alembic revisions `20260716_0001`, `20260716_0002`, `20260828_0003`, `20260907_0004`, and `20260907_0005`
+- Schema: seven append-only Alembic revisions through `20260912_0007`; the two latest revisions widen release identities and preserve raw Issue aliases while backfilling Java symbol fingerprints
 - Collector V2/V3: typed explicit envelopes and exact post-commit schema/batch/count ACK; V3 carries occurrence-bound release/installation/native identity
 - Identity: V2/V3 installation values are replaced before persistence by a tenant/domain-separated, versioned HMAC; V3 release identity is stored as `OCCURRENCE_BOUND`
 - Query/BFF: fixed-scope `apmq1` viewer/investigator credentials, bounded release-health/fingerprint/Issue-detail/data-quality queries, investigator-only event/raw access, audited human release decisions, and HMAC-bound cursors
 - Web console: React/TypeScript/Vite same-origin routed console for overview, Issues/detail, event exploration/detail, releases, quality, and explicit capability gaps; raw `apmq1` is exchanged once for a revocable, short-lived HttpOnly session with bound CSRF protection
-- Symbolization: independent CI keys, private-volume artifact adapter, just-in-time single-job claims, unique claim tokens, database-clock expiry fencing, bounded job deadlines and cancellation cleanup; missing-artifact polls spend no tool attempts; disabled by default until audited R8/LLVM tools are deployed
-- Operations: bounded asynchronous key verification, real database backlog snapshots, separate private worker metrics listeners, terminal raw retention with replay metadata preserved, and transactional ingest capacity backpressure
-- Local verification: dependency sync, Ruff, mypy over 55 source files, 150 backend tests, 12 required documents, all four frontend gates with 12 Vitest tests, five-revision SQLite migration checks and real Android uploader E2E pass; routed-console desktop/mobile browser smoke remains historical 2026-09-04 evidence
-- Verification: a real Android `HttpApmUploader` V2/V3 loopback E2E proves Gzip/exact ACK/typed and occurrence persistence/HMAC/replay against test-only SQLite; do not infer Docker/PostgreSQL/TLS/SigNoz deployment from it
+- Symbolization: independent CI keys, private-volume artifact adapter, just-in-time single-job claims, unique claim tokens, database-clock expiry fencing, bounded job deadlines and streaming output limits; Native frames use exact per-module ELF identities and explicit partial resolution, missing modules spend no tool attempts; disabled by default until audited production R8/LLVM tools are deployed
+- Operations: bounded asynchronous key verification, private worker metrics, safe exception diagnostics, terminal raw retention with replay metadata and explicit evidence expiry/coverage states, and transactional ingest capacity backpressure
+- Local verification: dependency sync, Ruff, mypy over 55 source files, 204 backend tests with the opt-in local NDK 27 / LLVM 18 two-ELF regression, 12 required documents, all four frontend gates with 18 Vitest tests, seven-revision SQLite migration checks; routed-console desktop/mobile browser smoke remains historical 2026-09-04 evidence
+- Verification: 2026-09-12 real Android `HttpApmUploader` V2/V3 loopback E2E passed against seven-revision test-only SQLite with Gzip/exact ACK/typed and occurrence persistence/HMAC/replay; six PostgreSQL integration tests were skipped without a configured connection. Do not infer Docker/PostgreSQL/TLS/SigNoz deployment from local evidence
 
 ## Non-negotiable invariants
 

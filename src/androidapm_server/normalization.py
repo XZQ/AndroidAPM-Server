@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 from androidapm_server.constants import (
+    EVIDENCE_AVAILABLE,
+    EVIDENCE_EXPIRED,
     MAX_FUTURE_SKEW_SECONDS,
     NORMALIZATION_VERSION,
     OTLP_INT64_MAX,
@@ -137,6 +139,23 @@ _LINE_NUMBER_PATTERN = re.compile(r":\d+\)")
 def registry_snapshot() -> list[dict[str, Any]]:
     """Return a deterministic JSON-safe registry snapshot for drift tests and docs."""
     return [asdict(definition) for definition in FIELD_REGISTRY]
+
+
+def field_availability(normalized: dict[str, Any], *, raw_pruned: bool) -> dict[str, str]:
+    """Keep original invalid/missing states; removed available fields become expired."""
+    states = normalized.get("field_states")
+    if not isinstance(states, dict):
+        return {}
+    retained = normalized.get("registered_fields")
+    if not isinstance(retained, dict):
+        retained = {}
+    return {
+        key: EVIDENCE_EXPIRED
+        if raw_pruned and state == EVIDENCE_AVAILABLE and key not in retained
+        else state
+        for key, state in states.items()
+        if isinstance(key, str) and isinstance(state, str)
+    }
 
 
 def normalize_event(event: ApmEvent) -> NormalizationResult:

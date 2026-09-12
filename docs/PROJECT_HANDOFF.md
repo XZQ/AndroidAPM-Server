@@ -18,7 +18,11 @@
 
 7. 工具输出内存：并发分块处理三条管道，stdout/stderr 各自 1 MiB，在追加前检查；溢出立即 kill/reap，超时/取消清理只丢弃剩余字节。真实 Python 子进程覆盖双流超限后阻塞、精确边界和先输出后读大输入，38 项符号化测试通过；完整门禁为后端 200 tests（含本机 NDK）、前端 16 tests。
 
-环境边界：本轮没有 Docker/Podman/psql，未配置 PostgreSQL 集成连接。SQLite/合成数据及本机双 ELF LLVM 验证不能替代 PostgreSQL、真实 R8/设备崩溃采集、生产工具镜像、Compose/SigNoz/TLS 验收。
+8. 保留期证据语义：场景 TTL 不变，仅保存 presence 状态；原可用但已清理的注册字段标 EXPIRED，历史场景缺少 presence 时标 RETENTION_UNKNOWN。SQL 加权覆盖包含可用/缺失/过期/历史未知事件，部分分布 DEGRADED；Web 显示覆盖和原因。SQLite 清理前后、历史兼容、API 元数据/Issue、SDK 真零保留与 Web 展示回归通过。完整门禁为后端 204 tests（含本机 NDK）、前端 18 tests；依赖锁同步、Ruff、mypy 55 files、文档 12、前端 lint/typecheck/build 和 diff check 通过。
+
+最终跨仓库联调：客户端工作目录实际构建的 `HttpApmUploader` V2/V3 → 当前服务端 loopback 通过（退出码 0），测试数据库从空库升级七版至 `20260912_0007`，验证 Gzip、精确 ACK、typed/occurrence 持久化、HMAC/明文排除、重复重放。客户端有其他并行工作，末次检查 HEAD 为 `b776c68`，联调相关 model/uploader 路径干净，其最近改动为 `38969d0`；不能把本次证据归给旧 `90dd147`。两份 JAR 写入时间均早于联调，SHA-256 分别为 model `a128ac0c0d3ef21c595689e3756eff10637b305b0f02bce25cd69f26cd1b2c4a`、uploader `0a034ad075cdefb347c30e873f765a51dababf0d326276f65218a6d17d0d20ca`。首轮在 `C:\Windows\Temp` 清理数据库遇到文件占用；从客户端工作目录、使用用户 `LOCALAPPDATA\Temp` 重跑完整通过，本轮未修改或提交客户端源码。
+
+环境边界：本轮没有 Docker/Podman/psql，未配置 PostgreSQL 集成连接，6 项集成测试明确 skip。SQLite/跨语言 loopback 及本机双 ELF LLVM 验证不能替代 PostgreSQL、真实 R8/设备崩溃采集、生产工具镜像、Compose/SigNoz/TLS 验收。
 
 ## 2026-09-07 顺序整改
 

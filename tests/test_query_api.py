@@ -165,6 +165,23 @@ async def test_expired_raw_is_reported_and_audited_instead_of_returning_a_stub(
         "/v1/query/events/new-crash-1", headers=auth(credentials["investigator-a"])
     )
     assert metadata.status_code == 200 and metadata.json()["rawAvailable"] is False
+    assert metadata.json()["fieldStates"]["stackTrace"] == "EXPIRED"
+    fingerprint = metadata.json()["event"]["incidentFingerprint"]
+    issue = await client.get(
+        f"/v1/query/issues/{fingerprint}",
+        headers=auth(credentials["viewer-a"]),
+        params=window_params(),
+    )
+    assert issue.status_code == 200
+    scenes = issue.json()["scenes"]
+    assert scenes["state"] == "DEGRADED" and scenes["reason"] == "SCENE_EVIDENCE_EXPIRED"
+    assert scenes["coverage"] == {
+        "totalEventCount": 2,
+        "availableEventCount": 1,
+        "missingEventCount": 0,
+        "expiredEventCount": 1,
+        "retentionUnknownEventCount": 0,
+    }
     raw = await client.post(
         "/v1/query/events/new-crash-1/raw",
         headers=auth(credentials["investigator-a"]),
@@ -364,6 +381,7 @@ async def test_issue_detail_aggregates_trend_and_only_supported_dimensions(
         "state": "UNKNOWN_COVERAGE",
         "reason": "STANDARD_DEVICE_RESOURCE_NOT_PROVIDED",
         "items": [],
+        "coverage": None,
     }
     assert body["androidVersions"]["state"] == "UNKNOWN_COVERAGE"
     assert response.headers["cache-control"] == "private, no-store"

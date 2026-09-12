@@ -29,6 +29,8 @@ const REASON_LABELS: Record<string, string> = {
   LATE_DATA_PRESENT: "窗口内存在迟到数据",
   FINGERPRINT_NOT_FOUND: "当前固定范围内没有找到该事故指纹",
   SCENE_NOT_PROVIDED: "客户端未提供标准场景字段",
+  SCENE_EVIDENCE_EXPIRED: "部分或全部场景证据已按保留策略过期",
+  SCENE_RETENTION_UNKNOWN: "历史清理未记录场景是否曾提供，分布覆盖不完整",
   STANDARD_DEVICE_RESOURCE_NOT_PROVIDED: "客户端尚未提供标准设备型号资源",
   STANDARD_OS_RESOURCE_NOT_PROVIDED: "客户端尚未提供标准 Android 版本资源",
 };

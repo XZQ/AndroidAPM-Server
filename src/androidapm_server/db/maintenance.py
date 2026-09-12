@@ -10,9 +10,11 @@ from sqlalchemy import and_, delete, exists, func, or_, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from androidapm_server.config import Settings
+from androidapm_server.constants import EVIDENCE_EXPIRED, EVIDENCE_MISSING
 from androidapm_server.db.models import AuditLog, InboxEvent, IngestRateWindow, SymbolizationJob
 from androidapm_server.errors import ApiError
 from androidapm_server.metrics import RETENTION_EVENTS, RETENTION_LAST_SUCCESS
+from androidapm_server.normalization import field_availability
 
 LIVE_STATUSES = ("pending", "processing", "awaiting_symbols")
 UNFINISHED_SYMBOL_STATUSES = ("pending", "processing", "symbols_missing")
@@ -112,6 +114,10 @@ async def maintain_once(
             for row in rows:
                 # Final states cannot be claimed by workers. Preserve scope, occurrence columns,
                 # payload hash and HMAC version so cleanup never re-admits a duplicate batch.
+                scene = row.payload_json.get("scene")
+                scene_state = (
+                    EVIDENCE_EXPIRED if isinstance(scene, str) and scene else EVIDENCE_MISSING
+                )
                 row.payload_json = {
                     key: row.payload_json[key]
                     for key in ("module", "name")
@@ -122,12 +128,16 @@ async def maintain_once(
                     for key, value in row.normalized_json.get("indexed_attributes", {}).items()
                     if isinstance(value, (int, float, bool))
                 }
-                row.normalized_json = {
+                normalized = {
                     **row.normalized_json,
                     "registered_fields": retained,
                     "indexed_attributes": retained,
                     "raw_available": False,
+                    # Store presence only; scene strings must expire with raw evidence.
+                    "retention": {"scene_state": scene_state},
                 }
+                normalized["field_states"] = field_availability(normalized, raw_pruned=True)
+                row.normalized_json = normalized
                 row.native_identity_json = []
                 row.raw_pruned_at = observed
                 row.payload_size_bytes = 0

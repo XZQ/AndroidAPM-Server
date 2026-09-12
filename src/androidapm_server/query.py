@@ -15,6 +15,10 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from androidapm_server.constants import (
+    EVIDENCE_AVAILABLE,
+    EVIDENCE_EXPIRED,
+    EVIDENCE_MISSING,
+    EVIDENCE_RETENTION_UNKNOWN,
     MAX_IDENTIFIER_BYTES,
     QUERY_STATE_DEGRADED,
     QUERY_STATE_LATE,
@@ -28,6 +32,7 @@ from androidapm_server.db.models import InboxEvent, ReleaseDecision
 from androidapm_server.db.query import QueryFact, query_bucket_ms
 from androidapm_server.domain import IdentityQuality
 from androidapm_server.errors import ApiError
+from androidapm_server.normalization import field_availability
 from androidapm_server.query_auth import QueryPrincipal
 
 QUERY_SOURCE = "durable_inbox"
@@ -179,6 +184,16 @@ class IssueDistributionItem(QueryModel):
     affected_installation_count: int | None
 
 
+class IssueDistributionCoverage(QueryModel):
+    """Weighted dimension coverage, including retained events whose values have expired."""
+
+    total_event_count: int
+    available_event_count: int
+    missing_event_count: int
+    expired_event_count: int
+    retention_unknown_event_count: int
+
+
 class IssueDistribution(QueryModel):
     """State-bearing Issue dimension that never invents unavailable resource data."""
 
@@ -186,6 +201,7 @@ class IssueDistribution(QueryModel):
     state: str
     reason: str | None = None
     items: list[IssueDistributionItem]
+    coverage: IssueDistributionCoverage | None = None
 
 
 class IssueTrendPoint(QueryModel):
@@ -552,6 +568,9 @@ def build_issue_detail(
         eligible,
         lambda fact: fact.scene,
         unavailable_reason="SCENE_NOT_PROVIDED",
+        state_for=lambda fact: (
+            fact.scene_state or (EVIDENCE_AVAILABLE if fact.scene else EVIDENCE_MISSING)
+        ),
     )
     unavailable_resource = IssueDistribution(
         dimension="device_model",
@@ -597,13 +616,19 @@ def _issue_distribution(
     value_for: Callable[[QueryFact], str | None],
     *,
     unavailable_reason: str,
+    state_for: Callable[[QueryFact], str] | None = None,
 ) -> IssueDistribution:
     """Build a deterministic top-10 aggregate for one allow-listed Issue dimension."""
     continuity_reason = _installation_continuity_reason(facts)
     grouped: dict[str, list[QueryFact]] = defaultdict(list)
+    counts: Counter[str] = Counter()
     for fact in facts:
         label = value_for(fact)
-        if label:
+        availability = (
+            state_for(fact) if state_for else EVIDENCE_AVAILABLE if label else EVIDENCE_MISSING
+        )
+        counts[availability] += fact.weight
+        if label and availability == EVIDENCE_AVAILABLE:
             grouped[str(label)].append(fact)
     items = [
         IssueDistributionItem(
@@ -614,12 +639,25 @@ def _issue_distribution(
         for label, group in grouped.items()
     ]
     items.sort(key=lambda item: (-item.event_count, item.label))
+    unavailable_count = (
+        counts[EVIDENCE_EXPIRED] + counts[EVIDENCE_MISSING] + counts[EVIDENCE_RETENTION_UNKNOWN]
+    )
+    coverage_reason = (
+        "SCENE_RETENTION_UNKNOWN"
+        if counts[EVIDENCE_RETENTION_UNKNOWN]
+        else "SCENE_EVIDENCE_EXPIRED"
+        if counts[EVIDENCE_EXPIRED]
+        else unavailable_reason
+    )
     if not facts:
         state = QUERY_STATE_NO_DATA
         reason = None
     elif not items:
         state = QUERY_STATE_UNAVAILABLE
-        reason = unavailable_reason
+        reason = coverage_reason
+    elif unavailable_count:
+        state = QUERY_STATE_DEGRADED
+        reason = coverage_reason
     else:
         state = QUERY_STATE_PRESENT
         reason = None
@@ -628,6 +666,13 @@ def _issue_distribution(
         state=state,
         reason=reason,
         items=items[:10],
+        coverage=IssueDistributionCoverage(
+            total_event_count=_sample_count(facts),
+            available_event_count=counts[EVIDENCE_AVAILABLE],
+            missing_event_count=counts[EVIDENCE_MISSING],
+            expired_event_count=counts[EVIDENCE_EXPIRED],
+            retention_unknown_event_count=counts[EVIDENCE_RETENTION_UNKNOWN],
+        ),
     )
 
 
@@ -857,15 +902,8 @@ def event_summary(event: InboxEvent) -> EventSummary:
 
 
 def field_states(event: InboxEvent) -> dict[str, str]:
-    """Return only normalization availability states, never registered raw values."""
-    value = event.normalized_json.get("field_states")
-    if not isinstance(value, dict):
-        return {}
-    return {
-        str(key): str(item)
-        for key, item in value.items()
-        if isinstance(key, str) and isinstance(item, str)
-    }
+    """Report retention-aware availability, including rows pruned before state tracking."""
+    return field_availability(event.normalized_json, raw_pruned=event.raw_pruned_at is not None)
 
 
 def decision_response(decision: ReleaseDecision) -> ReleaseDecisionResponse:

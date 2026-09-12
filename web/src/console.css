@@ -188,6 +188,9 @@ body,
 .distribution-tabs button { flex: 0 0 auto; padding: 0.45rem 0.6rem; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-size: 0.65rem; }
 .distribution-tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 .distribution-list { display: grid; gap: 0.7rem; }
+.distribution-coverage { margin: 0 0 0.9rem; color: var(--muted); font-size: 0.7rem; line-height: 1.6; }
+.distribution-warning { margin-bottom: 0.7rem; }
+.distribution-warning p { margin: 0.45rem 0 0; color: var(--muted); font-size: 0.7rem; }
 .distribution-list > div { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 0.6rem; }
 .distribution-list span, .distribution-list strong, .distribution-list small { font-size: 0.65rem; }
 .distribution-list strong { color: var(--text); }
