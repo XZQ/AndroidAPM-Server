@@ -17,7 +17,11 @@ from elftools.elf.elffile import ELFFile
 
 from androidapm_server.errors import ApiError
 
-JAVA_CLASS_MAPPING = re.compile(r"^\S.* -> [A-Za-z0-9_$]+:$")
+# R8 mappings use dotted JVM binary names, including Unicode and generated names.
+# A class segment cannot contain a package separator or JVM descriptor punctuation.
+JAVA_CLASS_SEGMENT = r"[^\s.:;/\[\]]+"
+JAVA_CLASS_NAME = rf"{JAVA_CLASS_SEGMENT}(?:\.{JAVA_CLASS_SEGMENT})*"
+JAVA_CLASS_MAPPING = re.compile(rf"^{JAVA_CLASS_NAME} -> {JAVA_CLASS_NAME}:$")
 SUPPORTED_ABI_BY_MACHINE = {
     "EM_AARCH64": "arm64-v8a",
     "EM_ARM": "armeabi-v7a",

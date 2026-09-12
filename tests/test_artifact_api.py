@@ -108,6 +108,18 @@ async def test_mapping_identity_accepts_protocol_width(
     ).status_code == 400
 
 
+async def test_packaged_mapping_upload_and_replay(
+    artifact_api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str, str, Path],
+) -> None:
+    client, _factory, key, _ingest_key, _root = artifact_api
+    content = b"com.example.Real -> com.example.a:\n    void run() -> a\n"
+    headers = artifact_headers(key, content)
+    first = await client.post("/v1/artifacts/java-mapping", headers=headers, content=content)
+    assert first.status_code == 200
+    replay = await client.post("/v1/artifacts/java-mapping", headers=headers, content=content)
+    assert replay.status_code == 200 and replay.json()["duplicate"]
+
+
 @pytest.mark.asyncio
 async def test_mapping_upload_is_immutable_audited_and_idempotent(
     artifact_api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str, str, Path],

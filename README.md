@@ -1,5 +1,7 @@
 # AndroidAPM-Server
 
+Java mapping validation accepts dotted JVM class names, including kept package/class names, inner classes, Unicode and generated lambda names. Empty segments, descriptor/path punctuation and NUL-containing input remain invalid.
+
 Migration `20260912_0007` preserves raw fingerprint aliases and applies completed Java symbol fingerprints to Issue grouping. New completions update the Issue identity within the fenced symbolization transaction. Old links resolve within the authenticated scope/window; ambiguous splits return `409 ambiguous_issue_fingerprint`. Raw replay identity remains unchanged; previously exported SigNoz records are not rewritten. See ADR 0009.
 
 Migration `20260912_0006` widens release/build/variant storage to match the existing 256-byte SDK protocol, including symbol identities and human release decisions. Apply migrations before rolling out this version; a downgrade refuses to narrow columns while values longer than 128 characters exist. Ingest headers, artifact uploads and query filters share the same 256-byte limit.
