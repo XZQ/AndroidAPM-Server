@@ -457,6 +457,66 @@ async def test_full_width_release_can_be_queried_and_recorded(
     assert rejected.status_code == 400
 
 
+async def test_old_issue_links_resolve_with_scope_and_reject_split_aliases(
+    query_api: tuple[
+        AsyncClient, async_sessionmaker[AsyncSession], dict[str, str], InstallationHmacKeyRing
+    ],
+) -> None:
+    client, factory, credentials, keys = query_api
+    events = [
+        _event(
+            f"alias-{index}",
+            "crash",
+            "java_crash",
+            {"stackTrace": f"at alias.Class{index}.run(SourceFile:1)"},
+            "2.0.0",
+            f"alias-installation-{index}",
+        )
+        for index in range(2)
+    ]
+    canonical = "d" * 64
+    async with factory() as session:
+        await insert_batch(session, _metadata("tenant-a"), events, keys)
+        rows = list(
+            (
+                await session.scalars(
+                    select(InboxEvent).where(
+                        InboxEvent.event_id.in_([event.event_id for event in events])
+                    )
+                )
+            ).all()
+        )
+        alias = rows[0].raw_incident_fingerprint
+        assert alias is not None
+        for row in rows:
+            row.incident_fingerprint = canonical
+        await session.commit()
+    headers = auth(credentials["investigator-a"])
+    detail = await client.get(f"/v1/query/issues/{alias}", headers=headers, params=window_params())
+    assert detail.status_code == 200
+    assert detail.json()["fingerprint"] == canonical and detail.json()["eventCount"] == 2
+    page = await client.get(
+        "/v1/query/events", headers=headers, params=window_params(fingerprint=alias)
+    )
+    assert {item["eventId"] for item in page.json()["items"]} == {
+        event.event_id for event in events
+    }
+    foreign = await client.get(
+        f"/v1/query/issues/{alias}",
+        headers=auth(credentials["investigator-b"]),
+        params=window_params(),
+    )
+    assert foreign.status_code == 200 and foreign.json()["state"] == "NO_DATA"
+    async with factory() as session:
+        row = await session.scalar(select(InboxEvent).where(InboxEvent.event_id == "alias-1"))
+        assert row is not None
+        row.raw_incident_fingerprint = alias
+        row.incident_fingerprint = "e" * 64
+        await session.commit()
+    split = await client.get(f"/v1/query/issues/{alias}", headers=headers, params=window_params())
+    assert split.status_code == 409 and split.json()["code"] == "ambiguous_issue_fingerprint"
+
+
 @pytest.mark.asyncio
 async def test_event_pagination_is_allow_listed_audited_and_filter_bound(
     query_api: tuple[

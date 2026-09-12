@@ -30,6 +30,7 @@ from androidapm_server.constants import (
 from androidapm_server.db.base import Base
 from androidapm_server.db.inbox import insert_batch
 from androidapm_server.db.models import InboxEvent, SymbolArtifact, SymbolizationJob, Tenant
+from androidapm_server.db.query import load_window_facts, resolve_issue_fingerprint
 from androidapm_server.db.symbolization import (
     claim_symbolization_batch,
     enqueue_symbolization_jobs,
@@ -47,12 +48,86 @@ from androidapm_server.domain import (
     OccurrenceContext,
 )
 from androidapm_server.identity import InstallationHmacKeyRing
+from androidapm_server.query import build_top_fingerprints
+from androidapm_server.query_auth import QueryPrincipal
 from androidapm_server.symbolization import SymbolizationFailure, _run_tool, symbolize_job
 
 TEST_KEY_RING = InstallationHmacKeyRing.parse(
     '{"v1":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="}',
     "v1",
 )
+
+
+async def test_completed_symbols_group_issues_without_changing_replay_identity(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    events = [
+        crash_event("alias-a"),
+        crash_event("alias-b").model_copy(
+            update={"fields": {"stackTrace": "at b.b(SourceFile:1)"}}
+        ),
+    ]
+    canonical = "c" * 64
+    async with factory() as session:
+        await insert_batch(session, metadata(), events, TEST_KEY_RING)
+        await enqueue_symbolization_jobs(session, metadata(), events)
+        artifact = SymbolArtifact(
+            tenant_id="tenant-a",
+            artifact_type=ARTIFACT_TYPE_JAVA_MAPPING,
+            app_id="com.example",
+            version_code="42",
+            app_build="20260716.1",
+            variant="release",
+            abi="",
+            build_id="",
+            checksum_sha256="a" * 64,
+            size_bytes=1,
+            storage_key="synthetic",
+            uploaded_by="ci",
+        )
+        session.add(artifact)
+        await session.commit()
+        jobs = await claim_symbolization_batch(session, "owner", 2, 120)
+        assert len(jobs) == 2
+        for job in jobs:
+            assert not await mark_symbolized(
+                session, "stale", job, artifact.id, {}, "d" * 64, "retrace", "test"
+            )
+            assert await mark_symbolized(
+                session,
+                "owner",
+                job,
+                artifact.id,
+                {"symbolizedStack": "Real.run(Real.kt:1)"},
+                canonical,
+                "retrace",
+                "test",
+            )
+        await session.commit()
+    principal = QueryPrincipal("tenant-a", "key", "com.example", "production", "viewer", None)
+    start, end = 1_699_999_999_999, 1_700_000_000_001
+    async with factory() as session:
+        rows = (await session.scalars(select(InboxEvent))).all()
+        assert {row.incident_fingerprint for row in rows} == {canonical}
+        assert len({row.raw_incident_fingerprint for row in rows}) == 2
+        assert (await insert_batch(session, metadata(), events, TEST_KEY_RING)).duplicates == 2
+        facts = await load_window_facts(session, principal, start, end, 100)
+        result = build_top_fingerprints("query", principal, facts, "1.0", start, end, 10)
+        assert len(result.items) == 1 and result.items[0].event_count == 2
+        for row in rows:
+            assert row.raw_incident_fingerprint is not None
+            assert (
+                await resolve_issue_fingerprint(
+                    session, principal, row.raw_incident_fingerprint, start, end
+                )
+                == canonical
+            )
+            assert (
+                await resolve_issue_fingerprint(
+                    session, principal, row.raw_incident_fingerprint, end, end + 1
+                )
+                == row.raw_incident_fingerprint
+            )
 
 
 @pytest_asyncio.fixture

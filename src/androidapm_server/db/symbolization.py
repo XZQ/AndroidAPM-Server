@@ -323,6 +323,16 @@ async def mark_symbolized(
     )
     if not changed.rowcount:  # type: ignore[attr-defined]
         return False
+    if job.job_type == SYMBOL_JOB_JAVA:
+        # Publish the canonical Issue identity in the same fenced transaction as the result.
+        # Keep the raw alias and replay hash immutable so old links/retries remain meaningful.
+        await session.execute(
+            update(InboxEvent)
+            .where(
+                InboxEvent.id == job.inbox_event_id, InboxEvent.incident_fingerprint.is_not(None)
+            )
+            .values(incident_fingerprint=fingerprint_sha256)
+        )
     await _release_inbox(session, job.inbox_event_id)
     return True
 

@@ -48,6 +48,34 @@ class QueryFact:
     late: bool | None = None
 
 
+async def resolve_issue_fingerprint(
+    session: AsyncSession,
+    principal: QueryPrincipal,
+    fingerprint: str,
+    from_ms: int,
+    to_ms: int,
+) -> str:
+    """Resolve an old raw link within scope/window; never guess among split Issues."""
+    statement = (
+        select(InboxEvent.incident_fingerprint)
+        .distinct()
+        .where(
+            *_scope_window_predicates(principal, from_ms, to_ms),
+            InboxEvent.raw_incident_fingerprint == fingerprint,
+            InboxEvent.incident_fingerprint.is_not(None),
+        )
+        .limit(2)
+    )
+    matches = (await _execute_bounded(session, statement)).scalars().all()
+    if len(matches) > 1:
+        raise ApiError(
+            409,
+            "ambiguous_issue_fingerprint",
+            "This raw fingerprint resolves to multiple Issues; select a current Issue",
+        )
+    return str(matches[0]) if matches else fingerprint
+
+
 def query_bucket_ms(from_ms: int, to_ms: int) -> int:
     """Share the exact at-most-24, minute-aligned bucket width with response builders."""
     raw = (to_ms - from_ms + 23) // 24

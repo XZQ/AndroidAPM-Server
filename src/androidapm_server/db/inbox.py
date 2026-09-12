@@ -459,6 +459,7 @@ def _to_row(metadata: IngestMetadata, prepared: PreparedEvent) -> dict[str, Any]
         "normalization_version": NORMALIZATION_VERSION,
         "normalized_json": normalization.normalized_json,
         "incident_fingerprint": normalization.incident_fingerprint,
+        "raw_incident_fingerprint": normalization.incident_fingerprint,
         "native_identity_json": normalization.native_identity_json,
         "request_id": metadata.request_id,
     }

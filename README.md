@@ -1,5 +1,7 @@
 # AndroidAPM-Server
 
+Migration `20260912_0007` preserves raw fingerprint aliases and applies completed Java symbol fingerprints to Issue grouping. New completions update the Issue identity within the fenced symbolization transaction. Old links resolve within the authenticated scope/window; ambiguous splits return `409 ambiguous_issue_fingerprint`. Raw replay identity remains unchanged; previously exported SigNoz records are not rewritten. See ADR 0009.
+
 Migration `20260912_0006` widens release/build/variant storage to match the existing 256-byte SDK protocol, including symbol identities and human release decisions. Apply migrations before rolling out this version; a downgrade refuses to narrow columns while values longer than 128 characters exist. Ingest headers, artifact uploads and query filters share the same 256-byte limit.
 
 Trend buckets carry nullable counts: absent or V2-only occurrence evidence is never filled with zero. Release buckets include `newState`/`baselineState`; the console leaves gaps disconnected and shows an empty state when nothing is observable. The overview trust banner includes both releases' quality gates, including minimum installation samples.

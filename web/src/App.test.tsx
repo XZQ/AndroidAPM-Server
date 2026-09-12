@@ -30,7 +30,7 @@ it("restores an investigator session into a recoverable Issue detail route", asy
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const path = requestPath(input);
     if (path === "/v1/web/session") return json({ requestId: "session-2", scope, role: "investigator", expiresAtMs: Date.now() + 60_000 });
-    if (path.startsWith("/v1/query/issues/fingerprint-1?")) return json({ requestId: "issue-1", scope, window: { fromMs: 1, toMs: 2 }, fingerprint: "fingerprint-1", state: "PRESENT", reason: null, eventFamily: "JAVA_CRASH", eventCount: 2, affectedInstallationCount: 1, firstSeenMs: 1000, lastSeenMs: 2000, trend: [{ bucketStartMs: 1000, bucketEndMs: 2000, eventCount: 2, affectedInstallationCount: 1 }], releases: distribution("release_version", [{ label: "2.0.0", eventCount: 2, affectedInstallationCount: 1 }]), scenes: distribution("scene", []), deviceModels: distribution("device_model", [], "UNKNOWN_COVERAGE"), androidVersions: distribution("android_version", [], "UNKNOWN_COVERAGE") });
+    if (path.startsWith("/v1/query/issues/fingerprint-1?")) return json({ requestId: "issue-1", scope, window: { fromMs: 1, toMs: 2 }, fingerprint: "canonical-fingerprint", state: "PRESENT", reason: null, eventFamily: "JAVA_CRASH", eventCount: 2, affectedInstallationCount: 1, firstSeenMs: 1000, lastSeenMs: 2000, trend: [{ bucketStartMs: 1000, bucketEndMs: 2000, eventCount: 2, affectedInstallationCount: 1 }], releases: distribution("release_version", [{ label: "2.0.0", eventCount: 2, affectedInstallationCount: 1 }]), scenes: distribution("scene", []), deviceModels: distribution("device_model", [], "UNKNOWN_COVERAGE"), androidVersions: distribution("android_version", [], "UNKNOWN_COVERAGE") });
     if (path.startsWith("/v1/query/events?")) return json({ requestId: "events-1", scope, window: { fromMs: 1, toMs: 2 }, items: [], nextCursor: null });
     return json({ message: `unexpected ${path}` }, 404);
   });
@@ -40,6 +40,7 @@ it("restores an investigator session into a recoverable Issue detail route", asy
   expect(await screen.findByRole("heading", { name: /JAVA_CRASH/ })).toBeInTheDocument();
   expect(screen.getByText("发生趋势")).toBeInTheDocument();
   expect(screen.getByText("版本", { selector: "button" })).toHaveAttribute("aria-selected", "true");
+  expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringContaining("fingerprint=canonical-fingerprint"), expect.any(Object));
 });
 
 function distribution(dimension: string, items: unknown[], state = "PRESENT") {

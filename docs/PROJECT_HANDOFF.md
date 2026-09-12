@@ -10,6 +10,8 @@
 
 3. 发布身份长度：新增 `20260912_0006`，把数据库及接收/制品/查询/决策入口统一到现有协议的 256-byte 上限。129/256/257 边界、中文 UTF-8 查询、制品幂等、六版 SQLite migration/autogenerate 和防截断 downgrade 通过；全门禁为后端 162 tests、前端 16 tests。新增 PostgreSQL 实存回归，当前 6 项集成测试因缺少连接全部跳过。
 
+4. Issue 符号指纹：新增 `20260912_0007` 和 ADR 0009，保留 raw 别名、迁移历史完成任务，在 fenced 完成事务内切换 canonical Issue；旧链接限定 scope/window，拆分歧义返回 409。前端事件下钻使用服务端解析后的指纹。聚合、重放、旧 owner、跨租户、迁移/回退回归通过；全门禁为后端 165 tests、前端 16 tests。
+
 环境边界：本轮没有 Docker/Podman/psql，未配置 PostgreSQL 集成连接。SQLite/合成数据和本机门禁不能替代 PostgreSQL、真实 R8/LLVM、Compose/SigNoz/TLS 验收。
 
 ## 2026-09-07 顺序整改

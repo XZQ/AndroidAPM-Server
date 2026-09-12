@@ -20,6 +20,7 @@ from androidapm_server.db.query import (
     list_release_decisions,
     list_scoped_events,
     load_window_facts,
+    resolve_issue_fingerprint,
 )
 from androidapm_server.db.session import get_session
 from androidapm_server.errors import ApiError
@@ -161,6 +162,9 @@ async def get_issue_detail(
     validated_fingerprint = _optional_fingerprint(fingerprint)
     if validated_fingerprint is None:  # pragma: no cover - the path always supplies a value
         raise ApiError(400, "invalid_query_filter", "The fingerprint filter is invalid")
+    validated_fingerprint = await resolve_issue_fingerprint(
+        session, principal, validated_fingerprint, from_ms, to_ms
+    )
     facts = await load_window_facts(
         session,
         principal,
@@ -245,6 +249,10 @@ async def get_events(
     module = _optional_identifier(module, "module", 256)
     name = _optional_identifier(name, "name", 256)
     fingerprint = _optional_fingerprint(fingerprint)
+    if fingerprint is not None:
+        fingerprint = await resolve_issue_fingerprint(
+            session, principal, fingerprint, from_ms, to_ms
+        )
     filter_hash = cursor_filter_hash(
         principal, from_ms, to_ms, release_version, module, name, fingerprint
     )

@@ -149,6 +149,14 @@ class InboxEvent(Base):
         ),
         Index("ix_inbox_incident_fingerprint", "tenant_id", "incident_fingerprint"),
         Index(
+            "ix_inbox_raw_fingerprint_time",
+            "tenant_id",
+            "app_id",
+            "environment",
+            "raw_incident_fingerprint",
+            "occurrence_timestamp_ms",
+        ),
+        Index(
             "ix_inbox_release_time",
             "tenant_id",
             "app_id",
@@ -207,6 +215,7 @@ class InboxEvent(Base):
     )
     normalized_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     incident_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    raw_incident_fingerprint: Mapped[str | None] = mapped_column(String(64))
     native_identity_json: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON, nullable=False, default=list
     )

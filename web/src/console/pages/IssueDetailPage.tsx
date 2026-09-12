@@ -27,10 +27,11 @@ export function IssueDetailPage() {
     setDetail(null); setEvents(null);
     setError(null);
     try {
-      const [issue, page] = await Promise.all([
-        getIssueDetail(fingerprint, filters),
-        session.role === "investigator" ? getEvents(filters, fingerprint) : Promise.resolve(null),
-      ]);
+      const issue = await getIssueDetail(fingerprint, filters);
+      if (!current()) return;
+      const page = session.role === "investigator"
+        ? await getEvents(filters, issue.fingerprint)
+        : null;
       if (!current()) return;
       setDetail(issue);
       setEvents(page);
