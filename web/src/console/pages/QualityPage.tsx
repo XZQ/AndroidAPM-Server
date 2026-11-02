@@ -40,6 +40,9 @@ export function QualityPage() {
       <div className="quality-grid">
         <QualityCard icon={<ShieldCheck />} title="发生时版本身份" metric={quality.releaseIdentity} />
         <QualityCard icon={<ShieldCheck />} title="安装身份" metric={quality.installationIdentity} />
+        {quality.sessionIdentity && <QualityCard icon={<ShieldCheck />} title="会话身份" metric={quality.sessionIdentity} />}
+        {quality.deviceModelCoverage && <QualityCard icon={<ShieldCheck />} title="标准设备型号" metric={quality.deviceModelCoverage} />}
+        {quality.osVersionCoverage && <QualityCard icon={<ShieldCheck />} title="标准 OS 版本" metric={quality.osVersionCoverage} />}
         <QualityCard icon={<RadioTower />} title="SDK 自健康" metric={quality.sdkHealth} />
         <QualityCard icon={<TimerReset />} title="迟到数据" metric={quality.lateData} />
       </div>
@@ -52,7 +55,7 @@ export function QualityPage() {
         <SectionHeading title="解释边界" meta={<Database size={16} />} />
         <ul>
           <li>身份覆盖来自标准协议字段，不从任意 context/extras 推导。</li>
-          <li>Crash-free Sessions 与 ANR-free Sessions 仍不可计算，因为客户端尚未提供 occurrence-bound session identity。</li>
+          <li>会话率要求窗口内标准 session_start、完整会话身份和质量门槛；当前旧 SDK 尚未上报这些可选字段。</li>
           <li>本页证明查询契约与本地数据质量，不证明 PostgreSQL、SigNoz、TLS 或云端告警已部署。</li>
         </ul>
       </section>

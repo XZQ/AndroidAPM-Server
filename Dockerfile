@@ -8,6 +8,7 @@ RUN pnpm install --frozen-lockfile
 COPY web/index.html web/tsconfig.json web/tsconfig.app.json web/tsconfig.node.json ./
 COPY web/vite.config.ts web/eslint.config.js ./
 COPY web/src ./src
+COPY web/public ./public
 RUN pnpm run build
 
 FROM ghcr.io/astral-sh/uv:0.11.28 AS uv

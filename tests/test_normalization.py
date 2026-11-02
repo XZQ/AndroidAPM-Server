@@ -4,8 +4,80 @@ import json
 
 import pytest
 
-from androidapm_server.domain import ApmEvent
+from androidapm_server.domain import ApmEvent, NativeFrameIdentity, OccurrenceContext
 from androidapm_server.normalization import normalize_event
+
+
+def test_native_fingerprints_preserve_relative_pcs_and_ignore_load_bias() -> None:
+    event = ApmEvent(
+        timestamp=1_700_000_000_000,
+        event_id="native",
+        module="crash",
+        name="native_crash",
+        kind="ALERT",
+        severity="FATAL",
+        priority="CRITICAL",
+        process_name="app",
+        thread_name="main",
+        fields={"signal": 11, "backtrace": "#00 pc 00001234 /private/libsample.so"},
+    )
+    first = normalize_event(event)
+    changed_pc = normalize_event(
+        event.model_copy(
+            update={"fields": {"signal": 11, "backtrace": "#00 pc 00002345 /private/libsample.so"}}
+        )
+    )
+    tombstone = normalize_event(event.model_copy(update={"name": "tombstone_crash"}))
+    assert (
+        first.incident_fingerprint and first.incident_fingerprint != changed_pc.incident_fingerprint
+    )
+    assert tombstone.incident_fingerprint != first.incident_fingerprint
+    frame = NativeFrameIdentity(
+        abi="arm64-v8a",
+        module_build_id="0123456789abcdef",
+        module_name="libsample.so",
+        module_relative_pc=0x1234,
+        load_bias=0x70000000,
+    )
+    context = OccurrenceContext(
+        service_version="1",
+        version_code="1",
+        app_build="b",
+        variant="debug",
+        installation_id="i",
+        native_frames=[frame],
+    )
+    bound = event.model_copy(update={"occurrence": context})
+    relocated = bound.model_copy(
+        update={
+            "occurrence": context.model_copy(
+                update={"native_frames": [frame.model_copy(update={"load_bias": 0x80000000})]}
+            )
+        }
+    )
+    assert (
+        normalize_event(bound).incident_fingerprint
+        == normalize_event(relocated).incident_fingerprint
+    )
+
+
+@pytest.mark.parametrize(
+    "backtrace", ["#00 pc (see tombstone for full backtrace)", "fault at 0x12345678", "", "unknown"]
+)
+def test_native_placeholder_never_invents_an_issue(backtrace: str) -> None:
+    event = ApmEvent(
+        timestamp=1_700_000_000_000,
+        event_id="native-placeholder",
+        module="crash",
+        name="native_crash",
+        kind="ALERT",
+        severity="FATAL",
+        priority="CRITICAL",
+        process_name="app",
+        thread_name="main",
+        fields={"signal": 11, "backtrace": backtrace},
+    )
+    assert normalize_event(event).incident_fingerprint is None
 
 
 @pytest.mark.parametrize(

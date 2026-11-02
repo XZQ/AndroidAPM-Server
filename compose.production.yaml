@@ -18,6 +18,9 @@ services:
     environment: *production-environment
     profiles: ["symbolization"]
 
+  alerts:
+    environment: *production-environment
+
   caddy:
     image: caddy:2.10.2-alpine
     environment:

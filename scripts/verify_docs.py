@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -20,10 +21,21 @@ REQUIRED_DOCS = (
     "08-部署与运维.md",
     "09-实施路线图.md",
     "10-Web控制台与本地联调.md",
+    "11-本地产品功能.md",
+    "12-统计契约与口径.md",
     "云端待建设清单.md",
 )
 MARKDOWN_LINK = re.compile(r"\[[^]]+]\(([^)]+)\)")
-IGNORED_MARKDOWN_DIRS = frozenset({".venv", "node_modules"})
+IGNORED_MARKDOWN_DIRS = frozenset({".git", ".local", ".venv", "node_modules"})
+# Additive server-side occurrence fields are intentionally absent from older SDKs.
+# No existing field, scalar type, number or repetition may change.
+OPTIONAL_OCCURRENCE_EXTENSIONS = frozenset(
+    {
+        ("ApmOccurrenceContext", "optional string", "session_id", "7"),
+        ("ApmOccurrenceContext", "optional string", "device_model", "8"),
+        ("ApmOccurrenceContext", "optional string", "os_version", "9"),
+    }
+)
 
 
 def main() -> int:
@@ -34,9 +46,7 @@ def main() -> int:
         if not (docs_dir / name).is_file():
             failures.append(f"missing required document: docs/{name}")
 
-    for markdown in ROOT.rglob("*.md"):
-        if IGNORED_MARKDOWN_DIRS.intersection(markdown.parts):
-            continue
+    for markdown in markdown_files(ROOT):
         text = markdown.read_text(encoding="utf-8")
         for raw_target in MARKDOWN_LINK.findall(text):
             target = unquote(raw_target.split("#", maxsplit=1)[0])
@@ -56,16 +66,10 @@ def main() -> int:
         failures.append("client repository still contains a duplicate cloud backlog")
 
     client_proto = (
-        ROOT.parent
-        / "AndroidAPM"
-        / "apm-model"
-        / "src"
-        / "main"
-        / "proto"
-        / "apm_event.proto"
+        ROOT.parent / "AndroidAPM" / "apm-model" / "src" / "main" / "proto" / "apm_event.proto"
     )
     server_proto = ROOT / "proto" / "apm_event.proto"
-    if client_proto.exists() and _field_signature(client_proto) != _field_signature(server_proto):
+    if client_proto.exists() and not compatible_proto_fields(client_proto, server_proto):
         failures.append("server compatibility proto fields differ from the Android client")
 
     if failures:
@@ -76,14 +80,39 @@ def main() -> int:
     return 0
 
 
-def _field_signature(path: Path) -> list[tuple[str, str, str]]:
-    """Compare only wire-significant field type/name/number across comment differences."""
-    pattern = re.compile(r"^\s*((?:map<[^>]+>)|\w+)\s+(\w+)\s*=\s*(\d+)\s*;")
-    return [
-        (match.group(1), match.group(2), match.group(3))
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if (match := pattern.match(line))
+def markdown_files(root: Path) -> list[Path]:
+    """Prune private Git/runtime/dependency trees before inspecting repository documentation."""
+    result: list[Path] = []
+    for directory, children, files in os.walk(root):
+        children[:] = [name for name in children if name not in IGNORED_MARKDOWN_DIRS]
+        result.extend(Path(directory) / name for name in files if name.endswith(".md"))
+    return result
+
+
+def compatible_proto_fields(client: Path, server: Path) -> bool:
+    """Accept only the reviewed optional occurrence extension over the legacy wire contract."""
+    client_fields = _field_signature(client)
+    server_fields = _field_signature(server)
+    # Preserve the complete legacy signature/order; only known absent optional fields differ.
+    return client_fields == [
+        field for field in server_fields
+        if field in client_fields or field not in OPTIONAL_OCCURRENCE_EXTENSIONS
     ]
+
+
+def _field_signature(path: Path) -> list[tuple[str, str, str, str]]:
+    """Compare message/type/name/number for the project's flat compatibility schemas."""
+    pattern = re.compile(
+        r"^\s*((?:(?:optional|repeated)\s+)?(?:map<[^>]+>|\w+))\s+(\w+)\s*=\s*(\d+)\s*;"
+    )
+    fields = []
+    message_name = ""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if message := re.match(r"^\s*message\s+(\w+)\s*\{", line):
+            message_name = message.group(1)
+        if match := pattern.match(line):
+            fields.append((message_name, match.group(1), match.group(2), match.group(3)))
+    return fields
 
 
 if __name__ == "__main__":

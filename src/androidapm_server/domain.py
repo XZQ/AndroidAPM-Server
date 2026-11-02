@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -88,6 +89,32 @@ class OccurrenceContext(BaseModel):
     variant: str
     installation_id: str = Field(repr=False)
     native_frames: tuple[NativeFrameIdentity, ...] = ()
+    session_id: str | None = Field(default=None, repr=False)
+    device_model: str | None = None
+    os_version: str | None = None
+
+    @field_validator("session_id")
+    @classmethod
+    def validate_session_id(cls, value: str | None) -> str | None:
+        """Accept an anonymous UUID captured by the runtime, never an arbitrary user ID."""
+        if value is not None:
+            if value != value.strip() or len(value) not in (32, 36):
+                raise ValueError("session identity must be an anonymous UUID")
+            UUID(value)
+        return value
+
+    @field_validator("device_model", "os_version")
+    @classmethod
+    def validate_device_resource(cls, value: str | None) -> str | None:
+        """Bound standard device labels; legacy absence remains distinguishable."""
+        if value is not None and (
+            not value
+            or value != value.strip()
+            or len(value.encode("utf-8")) > MAX_IDENTIFIER_BYTES
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        ):
+            raise ValueError("device resource must contain bounded printable text")
+        return value
 
     @field_validator(
         "service_version",

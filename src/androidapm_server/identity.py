@@ -12,6 +12,7 @@ from androidapm_server.constants import INSTALLATION_HMAC_DOMAIN
 
 _MIN_KEY_BYTES = 32
 _MAX_KEY_VERSIONS = 16
+SESSION_HMAC_DOMAIN = b"androidapm.session.v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,15 +53,22 @@ class InstallationHmacKeyRing:
 
     def digest(self, tenant_id: str, installation_id: str, version: str | None = None) -> str:
         """Return a tenant-isolated HMAC without retaining the plaintext input."""
+        return self._digest(INSTALLATION_HMAC_DOMAIN, tenant_id, installation_id, version)
+
+    def session_digest(self, tenant_id: str, session_id: str, version: str | None = None) -> str:
+        """Separate anonymous runtime sessions from installation identities cryptographically."""
+        return self._digest(SESSION_HMAC_DOMAIN, tenant_id, session_id, version)
+
+    def _digest(self, domain: bytes, tenant_id: str, identity: str, version: str | None) -> str:
         selected_version = version or self.active_version
         key = self.keys.get(selected_version)
         if key is None:
             raise ValueError("installation HMAC key version is unavailable")
         message = b"\x00".join(
             (
-                INSTALLATION_HMAC_DOMAIN,
+                domain,
                 tenant_id.encode("utf-8"),
-                installation_id.encode("utf-8"),
+                identity.encode("utf-8"),
             )
         )
         return hmac.new(key, message, hashlib.sha256).hexdigest()

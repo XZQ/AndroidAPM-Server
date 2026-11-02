@@ -53,6 +53,9 @@ class PreparedEvent:
     installation_hmac: str | None
     installation_hmac_key_version: str | None
     installation_plaintext: str | None
+    session_hmac: str | None
+    session_hmac_key_version: str | None
+    session_plaintext: str | None
     normalization: NormalizationResult
 
     @property
@@ -67,6 +70,7 @@ class PreparedEvent:
             self.release_quality.value,
             self.installation_quality.value,
             self.installation_hmac,
+            self.session_hmac,
         )
 
 
@@ -92,6 +96,8 @@ async def insert_batch(
             InboxEvent.installation_identity_quality,
             InboxEvent.installation_hmac,
             InboxEvent.installation_hmac_key_version,
+            InboxEvent.session_hmac,
+            InboxEvent.session_hmac_key_version,
         ).where(
             InboxEvent.tenant_id == metadata.tenant_id,
             InboxEvent.event_id.in_(prepared),
@@ -148,6 +154,8 @@ async def insert_batch(
                 InboxEvent.installation_identity_quality,
                 InboxEvent.installation_hmac,
                 InboxEvent.installation_hmac_key_version,
+                InboxEvent.session_hmac,
+                InboxEvent.session_hmac_key_version,
             ).where(
                 InboxEvent.tenant_id == metadata.tenant_id,
                 InboxEvent.event_id.in_(raced_ids),
@@ -203,6 +211,9 @@ def _prepare_unique_events(
             installation_hmac=item.installation_hmac,
             installation_hmac_key_version=item.installation_hmac_key_version,
             installation_plaintext=item.installation_plaintext,
+            session_hmac=item.session_hmac,
+            session_hmac_key_version=item.session_hmac_key_version,
+            session_plaintext=item.session_plaintext,
             normalization=item.normalization,
         )
         previous = prepared.get(event.event_id)
@@ -263,29 +274,52 @@ def _prepare_event(
             installation_plaintext,
         )
 
+    session_plaintext = occurrence.session_id if occurrence is not None else None
+    session_hmac = None
+    session_hmac_key_version = None
+    if session_plaintext is not None:
+        if installation_keys is None:
+            raise ApiError(
+                503,
+                "identity_service_unavailable",
+                "Session pseudonymization is not configured",
+                True,
+            )
+        session_hmac_key_version = installation_keys.active_version
+        session_hmac = installation_keys.session_digest(metadata.tenant_id, session_plaintext)
     payload = event.model_dump(mode="json")
+    # New optional fields must not alter canonical hashes for older V3 replay payloads.
+    if isinstance(payload.get("occurrence"), dict):
+        for key in ("session_id", "device_model", "os_version"):
+            if payload["occurrence"].get(key) is None:
+                payload["occurrence"].pop(key, None)
     _remove_known_installation_plaintext(payload, installation_plaintext)
+    _remove_known_installation_plaintext(payload, session_plaintext)
     # Identity cannot be silently rewritten: reject a batch if its required routing/release
     # identity embeds the installation secret. Optional evidence is minimized below instead.
-    if installation_plaintext and any(
-        installation_plaintext in value
-        for value in (
-            event.event_id,
-            event.module,
-            event.name,
-            event.process_name,
-            event.thread_name,
-            metadata.tenant_id,
-            metadata.app_id,
-            metadata.environment,
-            metadata.sdk_version,
-            metadata.request_id,
-            app_version,
-            app_build,
-            version_code,
-            variant,
+    if any(
+        secret
+        and any(
+            secret in value
+            for value in (
+                event.event_id,
+                event.module,
+                event.name,
+                event.process_name,
+                event.thread_name,
+                metadata.tenant_id,
+                metadata.app_id,
+                metadata.environment,
+                metadata.sdk_version,
+                metadata.request_id,
+                app_version,
+                app_build,
+                version_code,
+                variant,
+            )
+            if isinstance(value, str)
         )
-        if isinstance(value, str)
+        for secret in (installation_plaintext, session_plaintext)
     ):
         raise ApiError(
             422, "privacy_identity_conflict", "Required identity contains installation data"
@@ -323,6 +357,9 @@ def _prepare_event(
         installation_hmac=installation_hmac,
         installation_hmac_key_version=installation_hmac_key_version,
         installation_plaintext=installation_plaintext,
+        session_hmac=session_hmac,
+        session_hmac_key_version=session_hmac_key_version,
+        session_plaintext=session_plaintext,
         normalization=normalization,
     )
 
@@ -365,6 +402,8 @@ def _assert_existing_matches(
         installation_quality,
         installation_hmac,
         installation_hmac_key_version,
+        session_hmac,
+        session_hmac_key_version,
     ) = existing
     expected = (
         prepared.payload_hash,
@@ -395,7 +434,15 @@ def _assert_existing_matches(
         installation_hmac_key_version,
         installation_keys,
     )
-    if actual != expected or not matches_installation:
+    matches_session = _matches_existing_installation(
+        metadata.tenant_id,
+        prepared.session_plaintext,
+        session_hmac,
+        session_hmac_key_version,
+        installation_keys,
+        session_identity=True,
+    )
+    if actual != expected or not matches_installation or not matches_session:
         qualifier = "concurrently " if concurrent else ""
         raise ApiError(
             409,
@@ -410,6 +457,8 @@ def _matches_existing_installation(
     stored_hmac: object,
     stored_version: object,
     installation_keys: InstallationHmacKeyRing | None,
+    *,
+    session_identity: bool = False,
 ) -> bool:
     """Compare replay identity with the row's original key version, not the active version."""
     if plaintext is None:
@@ -421,7 +470,9 @@ def _matches_existing_installation(
     ):
         return False
     try:
-        candidate = installation_keys.digest(tenant_id, plaintext, stored_version)
+        candidate = (
+            installation_keys.session_digest if session_identity else installation_keys.digest
+        )(tenant_id, plaintext, stored_version)
     except ValueError:
         return False
     return hmac.compare_digest(candidate, stored_hmac)
@@ -447,6 +498,13 @@ def _to_row(metadata: IngestMetadata, prepared: PreparedEvent) -> dict[str, Any]
         "installation_identity_quality": prepared.installation_quality.value,
         "installation_hmac": prepared.installation_hmac,
         "installation_hmac_key_version": prepared.installation_hmac_key_version,
+        "session_identity_quality": IdentityQuality.OCCURRENCE_BOUND.value
+        if prepared.session_hmac
+        else IdentityQuality.ABSENT.value,
+        "session_hmac": prepared.session_hmac,
+        "session_hmac_key_version": prepared.session_hmac_key_version,
+        "device_model": (prepared.payload.get("occurrence") or {}).get("device_model"),
+        "os_version": (prepared.payload.get("occurrence") or {}).get("os_version"),
         "event_timestamp_ms": prepared.event.timestamp,
         "occurrence_timestamp_ms": normalization.occurrence_timestamp_ms,
         "collection_timestamp_ms": normalization.collection_timestamp_ms,

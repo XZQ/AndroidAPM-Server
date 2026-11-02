@@ -75,3 +75,24 @@ def test_requires_occurrence_and_rejects_legacy_field_smuggling() -> None:
 
 def test_batch_identity_is_schema_separated_from_v2() -> None:
     assert stable_batch_id_v3(["same-event"]).startswith("b3-")
+
+
+def test_optional_statistics_context_and_legacy_absence() -> None:
+    message = envelope()
+    assert (
+        decode_envelope_v3(message.SerializeToString(), max_events=32)
+        .events[0]
+        .occurrence.session_id
+        is None
+    )
+    occurrence = message.events[0].occurrence
+    occurrence.session_id = "5b3bd3a7-08ea-4f07-9a47-e04ecaeef009"
+    occurrence.device_model = "Example/Model"
+    occurrence.os_version = "14/API 34"
+    decoded = decode_envelope_v3(message.SerializeToString(), max_events=32).events[0].occurrence
+    assert decoded is not None
+    assert decoded.session_id == occurrence.session_id
+    assert decoded.device_model == "Example/Model" and decoded.os_version == "14/API 34"
+    occurrence.session_id = "user-email-not-an-anonymous-session"
+    with pytest.raises(ApiError):
+        decode_envelope_v3(message.SerializeToString(), max_events=32)

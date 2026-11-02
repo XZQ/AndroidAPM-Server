@@ -13,8 +13,10 @@ from androidapm_server.api.artifacts import router as artifacts_router
 from androidapm_server.api.health import router as health_router
 from androidapm_server.api.ingest import router as ingest_router
 from androidapm_server.api.middleware import request_context_middleware
+from androidapm_server.api.product import router as product_router
 from androidapm_server.api.query import router as query_router
 from androidapm_server.api.remote_config import router as remote_config_router
+from androidapm_server.api.traces import router as traces_router
 from androidapm_server.api.web import router as web_router
 from androidapm_server.api.web import ui_router as web_ui_router
 from androidapm_server.config import get_settings
@@ -53,6 +55,8 @@ def create_app() -> FastAPI:
     app.include_router(remote_config_router)
     app.include_router(artifacts_router)
     app.include_router(query_router)
+    app.include_router(product_router)
+    app.include_router(traces_router)
     app.include_router(web_router)
     app.include_router(web_ui_router)
     return app

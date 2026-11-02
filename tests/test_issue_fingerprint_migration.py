@@ -3,9 +3,10 @@
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import MetaData, Table, create_engine, select
 
 from androidapm_server.db.models import InboxEvent, SymbolizationJob, Tenant
 
@@ -31,10 +32,11 @@ def test_historical_symbol_fingerprints_and_downgrade(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{path.as_posix()}")
     try:
         with engine.begin() as connection:
+            historical_inbox = Table("inbox_events", MetaData(), autoload_with=connection)
             connection.execute(Tenant.__table__.insert().values(id="migration", name="Synthetic"))
             for index, status in enumerate(("symbolized", "failed")):
                 result = connection.execute(
-                    InboxEvent.__table__.insert().values(
+                    historical_inbox.insert().values(
                         tenant_id="migration",
                         event_id=f"event-{index}",
                         app_id="app",
@@ -48,6 +50,10 @@ def test_historical_symbol_fingerprints_and_downgrade(tmp_path: Path) -> None:
                         payload_sha256="a" * 64,
                         incident_fingerprint=str(index) * 64,
                         request_id="migration",
+                        received_at=datetime.now(UTC),
+                        next_attempt_at=datetime.now(UTC),
+                        status="pending",
+                        attempt_count=0,
                     )
                 )
                 connection.execute(

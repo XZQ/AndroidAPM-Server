@@ -30,6 +30,10 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://androidapm:change-me@localhost:5432/androidapm"
     )
     otlp_logs_endpoint: str = "http://localhost:4318/v1/logs"
+    otlp_metrics_endpoint: str = "http://localhost:4318/v1/metrics"
+    otlp_traces_endpoint: str = "http://localhost:4318/v1/traces"
+    otlp_metrics_enabled: bool = False
+    otlp_traces_enabled: bool = False
     otlp_headers_json: str = "{}"
     otlp_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     ingest_enabled: bool = True
@@ -84,6 +88,15 @@ class Settings(BaseSettings):
     web_session_hmac_key_b64: SecretStr = SecretStr("")
     web_session_ttl_seconds: int = Field(default=3_600, ge=300, le=43_200)
     web_session_cookie_secure: bool = False
+    alert_poll_seconds: float = Field(default=30, ge=1, le=300)
+    notification_channels_json: SecretStr = SecretStr("{}")
+    notification_max_attempts: int = Field(default=5, ge=1, le=20)
+
+    @field_validator("remote_config_signing_private_key_b64", mode="before")
+    @classmethod
+    def empty_signing_key_is_unconfigured(cls, value: object) -> object:
+        """Keep .env/Compose empty defaults equivalent to absent signing material."""
+        return None if isinstance(value, str) and not value.strip() else value
 
     @field_validator(
         "environment",

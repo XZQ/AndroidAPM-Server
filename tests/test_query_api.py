@@ -147,6 +147,84 @@ def window_params(**extra: object) -> dict[str, object]:
     return {"fromMs": FROM_MS, "toMs": TO_MS, **extra}
 
 
+async def test_new_context_is_used_by_sql_session_and_native_queries(query_api) -> None:
+    client, factory, credentials, key_ring = query_api
+    events = []
+    session_ids = ("5b3bd3a7-08ea-4f07-9a47-e04ecaeef009", "b67f341b-d22d-4978-8a40-a036ae61cb16")
+    for index, session_id in enumerate(session_ids):
+        for name, fields in (
+            ("session_start", {"session_schema_version": 1, "session_count": 1}),
+            ("sdk_health", {"emitCount": 20, "dropCount": 0, "dropRate": 0}),
+        ):
+            event = _event(
+                f"runtime-{index}-{name}", "core", name, fields, "6.0.0", f"install-{index}"
+            )
+            event = event.model_copy(
+                update={
+                    "occurrence": event.occurrence.model_copy(
+                        update={
+                            "session_id": session_id,
+                            "device_model": "Example/Model",
+                            "os_version": "14/API 34",
+                        }
+                    )
+                }
+            )
+            events.append(event)
+    native = _event(
+        "modern-native",
+        "crash",
+        "native_crash",
+        {"signal": 11, "backtrace": "#00 pc 00001234 /data/app/libsample.so"},
+        "6.0.0",
+        "install-0",
+    )
+    native = native.model_copy(
+        update={
+            "occurrence": native.occurrence.model_copy(
+                update={
+                    "session_id": session_ids[0],
+                    "device_model": "Example/Model",
+                    "os_version": "14/API 34",
+                }
+            )
+        }
+    )
+    events.append(native)
+    async with factory() as session:
+        await insert_batch(session, _metadata("tenant-a"), events, key_ring)
+        await session.commit()
+    app = client._transport.app
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None, query_min_installations=1
+    )
+    response = await client.get(
+        "/v1/query/release-health",
+        headers=auth(credentials["viewer-a"]),
+        params=window_params(newRelease="6.0.0", baselineRelease="3.0.0"),
+    )
+    assert response.status_code == 200, response.text
+    metrics = response.json()["newRelease"]["metrics"]
+    assert metrics["nativeCrashEvents"]["value"] == 1
+    assert metrics["crashFreeSessions"]["value"] == 0.5, metrics
+    assert metrics["crashFreeSessions"]["denominator"] == 2
+    assert metrics["anrFreeSessions"]["value"] == 1
+    fingerprints = await client.get(
+        "/v1/query/fingerprints",
+        headers=auth(credentials["viewer-a"]),
+        params=window_params(releaseVersion="6.0.0"),
+    )
+    issue = fingerprints.json()["items"][0]
+    assert issue["eventFamily"] == "NATIVE_CRASH"
+    detail = await client.get(
+        f"/v1/query/issues/{issue['fingerprint']}",
+        headers=auth(credentials["viewer-a"]),
+        params=window_params(),
+    )
+    assert detail.json()["deviceModels"]["items"][0]["label"] == "Example/Model"
+    assert detail.json()["androidVersions"]["coverage"]["availableEventCount"] == 1
+
+
 async def test_expired_raw_is_reported_and_audited_instead_of_returning_a_stub(
     query_api: tuple[
         AsyncClient, async_sessionmaker[AsyncSession], dict[str, str], InstallationHmacKeyRing
@@ -237,8 +315,8 @@ async def test_release_health_uses_exact_occurrence_events_and_explicit_states(
         "value": None,
         "numerator": None,
         "denominator": None,
-        "sampleCount": 6,
-        "coverage": None,
+        "sampleCount": 5,
+        "coverage": 0.0,
         "asOfMs": TO_MS,
         "source": "durable_inbox",
         "reason": "SESSION_ID_NOT_PROVIDED",
@@ -378,12 +456,18 @@ async def test_issue_detail_aggregates_trend_and_only_supported_dimensions(
     ]
     assert body["deviceModels"] == {
         "dimension": "device_model",
-        "state": "UNKNOWN_COVERAGE",
+        "state": "UNAVAILABLE",
         "reason": "STANDARD_DEVICE_RESOURCE_NOT_PROVIDED",
         "items": [],
-        "coverage": None,
+        "coverage": {
+            "totalEventCount": 2,
+            "availableEventCount": 0,
+            "missingEventCount": 2,
+            "expiredEventCount": 0,
+            "retentionUnknownEventCount": 0,
+        },
     }
-    assert body["androidVersions"]["state"] == "UNKNOWN_COVERAGE"
+    assert body["androidVersions"]["state"] == "UNAVAILABLE"
     assert response.headers["cache-control"] == "private, no-store"
 
     cross_tenant = await client.get(

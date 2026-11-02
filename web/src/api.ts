@@ -148,7 +148,7 @@ export async function getReleaseDecisions(releaseVersion: string): Promise<Relea
   );
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   if (init.body !== undefined && !headers.has("Content-Type")) {
@@ -175,7 +175,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await response.json()) as T;
 }
 
-function csrfHeaders(): HeadersInit {
+export function csrfHeaders(): HeadersInit {
   const token = readCookie(CSRF_COOKIE);
   if (token === null) {
     throw new ApiFailure(403, {
@@ -197,7 +197,7 @@ function readCookie(name: string): string | null {
   return null;
 }
 
-function queryString(values: Record<string, string | number | undefined>): string {
+export function queryString(values: Record<string, string | number | undefined>): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(values)) {
     if (value !== undefined && value !== "") {

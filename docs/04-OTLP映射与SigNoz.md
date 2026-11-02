@@ -1,5 +1,9 @@
 # OTLP 映射、事件目录与 SigNoz 集成
 
+2026-11-02 当前状态：服务端已实现 opt-in Metrics/Traces；SDK-health 数值已包含在唯一目录中，不重复输出。stage 延迟要求正数样本，空直方图零值不导出。当前 SDK 未发送 span v2 的真实起止，旧 Span 保持 Log/TIMING_UNAVAILABLE。下文早期“仅 Logs/规划”表格是原阶段范围，当前能力以本段和 ADR 0011 为准。
+
+2026-10-14 本地三信号：Logs 保持默认；Metrics/Traces 需独立 opt-in 并受 export_enabled 总开关控制。Metrics 输出 source-reviewed Gauge 观测，不从摘要/累计快照伪造 Counter/Histogram；Trace 仅 V2 span 的真实起止，旧缺时刻不导出。自由 name/body 在 Logs/Traces 固定为 manual_span，任意 attr_* 不默认索引。worker 原子冻结必需信号并逐项持久化成功，重试仅剩余信号；部分拒绝明确失败，失租不写回，已送达历史不自动补投。目录与口径见 [统计契约](12-统计契约与口径.md)，架构见 [ADR 0011](adr/0011-运行会话统计与多信号导出.md)。真实 SigNoz staging 尚未验收。
+
 > 事件目录审计基线：2026-08-28，干净客户端工作树 `AndroidAPM/develop@e1dd627`。本文同时描述目标契约和当前实现；标记为“规划”的能力不得从文档推断为已上线。
 
 ## 集成原则
@@ -20,18 +24,20 @@ durable raw event
 
 ## 当前实现与目标差距
 
+2026-10-13：normalization v3 增加 70 个经客户端源码核对的性能数值契约和 GC availability 标志，覆盖 13 个性能域。性能 Query 对发生时版本比较观测 P50/P75/P95、有效覆盖、缺失/无效/不可用样本和趋势；GC 不可用占位零不参与统计。保留 raw 的历史行可用 `uv run python scripts/backfill_performance.py` 重建投影，已过期 raw 不伪造证据。该扩展仍通过 OTLP Logs 导出，未新增 OTLP Metrics/Trace 信号。
+
 2026-09-07：normalization v2 对注册整数执行 OTLP int64 边界、对数值执行有限数校验，并检查计数/时长非负、比率 0–1 和历史退出时间范围。非法派生字段标记 INVALID，原始值继续保留，不让 NaN/Infinity 重新进入 PostgreSQL JSON。历史已入库坏行若无法映射，export worker 单独标记 recoverable dead letter，正常同批继续导出；非预期传输异常也必须消耗有限重试预算。
 
 | 能力 | 当前代码事实 | 生产目标 |
 | --- | --- | --- |
 | OTLP signal | 仅实现 OTLP Logs | 注册表覆盖后再增加确定性的 Metrics；Trace 需有效 span 契约 |
-| fields | initial source-reviewed registry covers `java_crash/anr_detected/app_exit/core/sdk_health`; legacy 类型恢复只发生在注册字段 | 继续按真实场景扩展版本化注册表；解析失败保留 Log 并标记质量 |
+| fields | normalization v3 覆盖 `java_crash/anr_detected/app_exit/core/sdk_health` 与 70 个性能数值契约；legacy 类型恢复只发生在注册字段 | 按真实场景继续扩展；解析失败保留 Log 并标记质量 |
 | attributes | mapper 只导出 normalization 的 allow-listed indexed attributes；任意 fields/context/extras 留在 inbox | 为新增属性执行 PII 与 cardinality review，不恢复全量展平 |
 | installation | V2/V3 入库前写专用 tenant-scoped HMAC/key version并删除已知明文 | 用真实安装窗口验证活跃/受影响分母、轮换和删除语义 |
 | device/OS | 客户端无标准 resource 字段，只有宿主可选 context | 冻结标准低基数字段后才成为保证维度；此前显示 coverage/unknown |
 | session | 没有统一 telemetry session 契约 | 客户端新增 occurrence-bound session 后才能计算 Crash-free sessions |
 | symbolization | 服务端 job/adapter 与 V3 identity schema 已有；真实采集链/工具/fixture 未验收 | 每事件 versionCode/appBuild/variant/ABI/build-id/relative PC 完整且可验证 |
-| Query/Dashboard/alert | fixed-scope Query/BFF、一个 overview、Crash/ANR/SDK-drop 三个无 channel 模板；未做真实 SigNoz staging | 托管 UI、场景空状态、低样本、租户 scope、触发/恢复全部验收后推广 |
+| Query/Dashboard/alert | fixed-scope 同源 Web、Inbox 性能分析及独立持久化告警/管理；SigNoz 资产仍为离线模板，未做真实 staging | 完成生产环境、SSO、真实渠道和 SigNoz 查询/渲染验收后推广 |
 
 ## Resource 与可信身份
 

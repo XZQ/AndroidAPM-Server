@@ -48,6 +48,9 @@ message ApmOccurrenceContext {
   string variant = 4;
   string installation_id = 5;
   repeated ApmNativeFrameIdentity native_frames = 6;
+  optional string session_id = 7;
+  optional string device_model = 8;
+  optional string os_version = 9;
 }
 
 message ApmNativeFrameIdentity {

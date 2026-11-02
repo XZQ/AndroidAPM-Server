@@ -94,7 +94,7 @@ export function OverviewPage() {
         <div>
           <strong>数据可信度：<StateBadge state={riskState} /></strong>
           <span>
-            版本身份 {formatPercent(quality?.releaseIdentity.coverage ?? null)} · 安装身份 {formatPercent(quality?.installationIdentity.coverage ?? null)} · Crash-free Sessions 不可计算
+            版本身份 {formatPercent(quality?.releaseIdentity.coverage ?? null)} · 安装身份 {formatPercent(quality?.installationIdentity.coverage ?? null)} · 会话率按标准身份与质量门槛计算
           </span>
         </div>
         <Link to={`${appPath}/quality`}>查看数据质量 <ArrowRight size={14} /></Link>
@@ -102,11 +102,15 @@ export function OverviewPage() {
 
       <section className="console-metric-row" aria-label="发布关键指标">
         <MetricTile label="Java Crash" metric={health.newRelease.metrics.javaCrashEvents} delta={health.comparison.javaCrashEventDelta} />
+        {health.newRelease.metrics.nativeCrashEvents && <MetricTile label="Native Crash" metric={health.newRelease.metrics.nativeCrashEvents} />}
+        {health.newRelease.metrics.nativeTombstoneEvents && <MetricTile label="历史 Tombstone" metric={health.newRelease.metrics.nativeTombstoneEvents} />}
         <MetricTile label="ANR" metric={health.newRelease.metrics.anrEvents} delta={health.comparison.anrEventDelta} />
         <MetricTile label="受影响安装" metric={health.newRelease.metrics.affectedInstallations} delta={health.comparison.affectedInstallationDelta} />
         <MetricTile label="活跃安装" metric={health.newRelease.metrics.activeInstallations} />
         <MetricTile label="安装影响率" metric={health.newRelease.metrics.affectedInstallationRatio} kind="ratio" delta={health.comparison.affectedInstallationRatioDelta} />
         <MetricTile label="SDK 丢弃率" metric={health.newRelease.metrics.sdkDropRate} kind="ratio" />
+        {health.newRelease.metrics.crashFreeSessions && <MetricTile label="Crash-free Sessions" metric={health.newRelease.metrics.crashFreeSessions} kind="ratio" />}
+        {health.newRelease.metrics.anrFreeSessions && <MetricTile label="ANR-free Sessions" metric={health.newRelease.metrics.anrFreeSessions} kind="ratio" />}
       </section>
 
       <div className="overview-grid">
@@ -131,7 +135,7 @@ export function OverviewPage() {
             <div><dt>Request</dt><dd title={health.requestId}>{shortId(health.requestId, 7)}</dd></div>
             <div><dt>Source</dt><dd>durable_inbox</dd></div>
           </dl>
-          <p>会话身份尚未标准化，因此不会展示 Crash-free 或 ANR-free 的伪百分比。</p>
+          <p>会话率需要窗口内标准 session_start、完整发生时身份与 SDK-health 覆盖；旧客户端缺失时显示不可用。</p>
         </aside>
       </div>
 

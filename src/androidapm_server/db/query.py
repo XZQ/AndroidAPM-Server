@@ -53,6 +53,12 @@ class QueryFact:
     last_occurrence_timestamp_ms: int | None = None
     late: bool | None = None
     scene_state: str | None = None
+    session_identity_quality: str = "ABSENT"
+    session_hmac: str | None = None
+    session_hmac_key_version: str | None = None
+    session_start_valid: bool = False
+    device_model: str | None = None
+    os_version: str | None = None
 
 
 async def resolve_issue_fingerprint(
@@ -146,6 +152,27 @@ async def load_window_facts(
         InboxEvent.installation_identity_quality.label("installation_identity_quality"),
         InboxEvent.installation_hmac.label("installation_hmac"),
         InboxEvent.installation_hmac_key_version.label("installation_hmac_key_version"),
+        InboxEvent.session_identity_quality.label("session_identity_quality"),
+        InboxEvent.session_hmac.label("session_hmac"),
+        InboxEvent.session_hmac_key_version.label("session_hmac_key_version"),
+        InboxEvent.device_model.label("device_model"),
+        InboxEvent.os_version.label("os_version"),
+        case(
+            (
+                and_(
+                    InboxEvent.payload_json["module"].as_string() == "core",
+                    InboxEvent.payload_json["name"].as_string() == "session_start",
+                    InboxEvent.normalized_json["registered_fields"][
+                        "session_schema_version"
+                    ].as_integer()
+                    == 1,
+                    InboxEvent.normalized_json["registered_fields"]["session_count"].as_integer()
+                    == 1,
+                ),
+                True,
+            ),
+            else_=False,
+        ).label("session_start_valid"),
         InboxEvent.incident_fingerprint.label("incident_fingerprint"),
         InboxEvent.schema_version.label("schema_version"),
         InboxEvent.protocol.label("protocol"),
@@ -293,6 +320,12 @@ def _fact_from_mapping(row: RowMapping) -> QueryFact:
         installation_identity_quality=cast(str, row["installation_identity_quality"]),
         installation_hmac=cast(str | None, row["installation_hmac"]),
         installation_hmac_key_version=cast(str | None, row["installation_hmac_key_version"]),
+        session_identity_quality=cast(str, row["session_identity_quality"]),
+        session_hmac=cast(str | None, row["session_hmac"]),
+        session_hmac_key_version=cast(str | None, row["session_hmac_key_version"]),
+        session_start_valid=cast(bool, row["session_start_valid"]),
+        device_model=cast(str | None, row["device_model"]),
+        os_version=cast(str | None, row["os_version"]),
         occurrence_timestamp_ms=cast(int, row["occurrence_timestamp_ms"]),
         received_at=cast(datetime, row["received_at"]),
         incident_fingerprint=cast(str | None, row["incident_fingerprint"]),

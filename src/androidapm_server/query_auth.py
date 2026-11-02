@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from androidapm_server.auth import PASSWORD_HASHER
 from androidapm_server.auth_budget import AUTH_ATTEMPTS, HASH_VERIFIER
-from androidapm_server.constants import QUERY_ROLE_INVESTIGATOR, QUERY_ROLES
+from androidapm_server.constants import QUERY_ROLE_ADMIN, QUERY_ROLE_INVESTIGATOR, QUERY_ROLES
 from androidapm_server.db.models import QueryKey, Tenant
 from androidapm_server.errors import ApiError
 
@@ -112,12 +112,18 @@ def _active_principal(query_key: QueryKey, tenant: Tenant) -> QueryPrincipal:
 
 def require_investigator(principal: QueryPrincipal) -> None:
     """Reject L1/L2 or decision writes from aggregate-only viewers."""
-    if principal.role != QUERY_ROLE_INVESTIGATOR:
+    if principal.role not in (QUERY_ROLE_INVESTIGATOR, QUERY_ROLE_ADMIN):
         raise ApiError(
             403,
             "insufficient_query_role",
             "The query credential does not allow event-level access",
         )
+
+
+def require_admin(principal: QueryPrincipal) -> None:
+    """Require independently provisioned administration within the immutable app scope."""
+    if principal.role != QUERY_ROLE_ADMIN:
+        raise ApiError(403, "admin_required", "An admin credential is required")
 
 
 def _parse_query_bearer(authorization: str | None) -> tuple[str, str]:

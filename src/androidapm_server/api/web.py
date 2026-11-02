@@ -148,6 +148,18 @@ async def get_web_asset(
 
 @ui_router.get("/")
 @ui_router.get("/app")
+@ui_router.get("/apps/{app_id}/overview")
+@ui_router.get("/apps/{app_id}/issues")
+@ui_router.get("/apps/{app_id}/issues/{fingerprint}")
+@ui_router.get("/apps/{app_id}/explore")
+@ui_router.get("/apps/{app_id}/events/{event_id}")
+@ui_router.get("/apps/{app_id}/performance")
+@ui_router.get("/apps/{app_id}/traces")
+@ui_router.get("/apps/{app_id}/traces/{trace_id}")
+@ui_router.get("/apps/{app_id}/releases")
+@ui_router.get("/apps/{app_id}/quality")
+@ui_router.get("/apps/{app_id}/alerts")
+@ui_router.get("/apps/{app_id}/settings")
 async def get_web_console(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> Response:

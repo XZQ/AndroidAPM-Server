@@ -1,6 +1,65 @@
 # AndroidAPM-Server 项目交接
 
-> 当前验证基线：2026-09-12，分支 `codex/server-foundation`。本文区分“本机已验证”和“需要外部环境验证”，不能把后者改写成已完成。
+> 当前本地产品基线：2026-11-02，服务端唯一分支 `main`。本文区分“本机已验证”和“需要外部环境验证”，历史条目保留当时事实。
+
+## 2026-11-02 本地差异修复与交付验证
+
+本轮从 GitHub/main 与本地 HEAD 同为 `24f5b8b4a6a2de12e29887421362e53558783133` 的未提交产品工作树继续，合并保存已有性能、告警、管理、九版迁移和三信号实现，并修复以下实际问题：
+
+- 性能、告警、设置、Trace 页面接入真实 API，替换占位；支持观测/覆盖/趋势/类别、规则创建编辑/评估/启停/静默/确认、一次显示凭据/撤销、签名配置发布/递增回滚、运行/制品/审计与手动 Span 真实时间线。所有新增写入沿用绑定 CSRF，viewer 无管理/Trace 请求，admin 继承 L1/L2 和发布决策入口。旧/缺失字段保持状态和 null；刷新失败及迟到响应不复用旧证据。
+- OTLP SDK-health 使用唯一性能目录，每事件每字段一个 Gauge 点；stage count 缺失/无效/非正时不导出占位延迟零，正样本真实零仍导出。
+- 告警最后一次尝试后崩溃，过期重领直接 FAILED/RETRY_EXHAUSTED，不越过重试预算；活跃最后 owner 仍可完成。领取和最终写回复用数据库实时时钟 fencing。
+- 文档扫描在遍历前剪除 .git/.local/依赖树；跨仓协议校验保留 message/type/name/number，只容许已审核的 ApmOccurrenceContext optional string 7–9，拒绝其他漂移。Docker Web build 复制 public 静态资产。
+- 修正此前过度完成描述：当前 AndroidAPM SDK 仍为 durable V4，未发送标准 session/device/OS/session_start/span v2；这些是服务端可选输入及客户端待接入契约。本轮没有改动或提交 Android 客户端仓库。历史 2026-10-14 的 SDK/浏览器证据按当时条目保留，不能代表当前源码。
+
+提交前验证：
+
+- `uv sync --all-groups --frozen`、Ruff、mypy（63 source files）、14 份必需文档和 diff check 通过。
+- 完整后端 **527 passed / 1 skipped**，分支覆盖率 **82.06%**（CI 门槛 70%）；skip 为未配置 `APM_TEST_NDK_BIN`。初次较长 Temp 路径触发既有 Windows 制品 os.replace 长路径问题；使用 `--basetemp C:/Users/24491/AppData/Local/Temp/af02` 重跑完整套件通过，未改变制品持久化实现。Docker 静态资产测试 3 项通过。
+- 前端 lint/typecheck、**8 suites / 25 tests**、生产 build 通过；新增回归覆盖实际产品路由、admin/viewer、管理 CSRF、null/真零、一次显示 secret 与页面切换、配置发布/回滚和 Trace 深链。前端损坏依赖按 frozen lockfile 修复；lockfile 未改变。
+- 独立 `.local` 测试库从空库执行九版 migration，另执行 SQLite head/check/downgrade base/upgrade head，通过且模型无差异。
+- 实际 Edge headless + 生产 build + FastAPI 冒烟通过：性能/告警/设置/Trace/事件探索/质量深链，创建规则/手动评估/静默/停用，创建并撤销一次显示凭据，signed config 发布/递增回滚，Trace 层级和真实时间条；1440px 桌面及 390px 窄屏无页面横向溢出、无 JavaScript 异常。只使用隔离 synthetic 数据和本地无外部渠道配置。证据为忽略目录 `.local/review-*.png` 与 `.local/review-browser.cjs`。
+- 6 项 PostgreSQL integration 因缺 `APM_TEST_POSTGRES_URL` 全部 skip；本机没有 Docker/Podman/psql，未执行容器运行、生产 PostgreSQL/SigNoz/TLS、真实通知、SDK 新契约或物理设备验收。浏览器 fixture 不替代这些门禁。
+
+## 2026-10-14 本地统计补齐
+
+- 服务端本地、GitHub 唯一分支及默认分支再次核对为 `main`；远端 foundation tip 保持 `24f5b8b4a6a2de12e29887421362e53558783133`。本轮服务端和客户端功能改动均保留在各自工作目录，尚未提交或推送。客户端分支为 `develop`。
+- 性能统计扩大为 **243 个数值字段 / 66 个精确事件 / 29 个固定类别**，覆盖客户端已经上报的 IO、Render、WebView、Battery 等全部目录；新增 mean/min/max、加权 FPS、真实类别分布和事件计数。整数计数、固定类别、duration availability/sample count、累计快照与窗口摘要分别处理；缺失、无效、不可用、过期、未知原值不混为零。SDK 未采集的 GPU overdraw/Native 峰值等不能在服务端补造，细节见统计契约。
+- Java Crash、Native Crash、ANR、Tombstone 分开计数、趋势、告警和指纹。Native 只使用可信 typed frames 或实际解析的 PC/module 帧；JNI 的“see tombstone”占位堆栈不产生合并指纹，ASLR load_bias 不参与分组。历史回填保留 payload/hash、身份、帧、Java/symbolized 指纹及 aliases；过期原文和损坏帧安全跳过。
+- 客户端 V3 occurrence 增加 optional 匿名 runtime session/device/OS；durable codec V5 读取 V1–V4，旧缓存不补当前身份。每次成功 SDK init 同步 durable 写入精确 `core/session_start`；重复 init 保持身份，stop/reinit 更换。Trace schema v2 使用真实 start/end epoch 和单调 duration。
+- 服务端九版 migration 至 `20261014_0009`，session 使用独立 HMAC domain，已知安装/session 明文在任何落库和派生证据前移除。旧 V3 optional absent 不改变 payload hash；重放使用原 key version。会话率仅在窗口内有效 start、完整身份/SDK-health/采样/迟到/安装门槛满足时显示；历史 app_exit/tombstone 不进入现场事故分子。标准设备/OS 分布及覆盖进入 Issue、事件详情和数据质量页。
+- 新增手动 Trace 列表/Span 详情及真实时间线；旧 span 缺起止、父节点缺失/重复/循环、时钟异常及 raw 过期保留具体状态。所有 Trace 查询保持 scope/RBAC、时间/行数预算，自由 name 和 attr_* 不进默认 OTLP 索引。
+- OTLP Metrics/Traces 显式 opt-in，默认关闭。数值观测为 Gauge；不把累计快照伪造成 Counter/Histogram。Logs/Metrics/Traces 首次 claim 固定导出计划，成功逐项持久化、重试只做剩余项，并保留数据库时钟 lease/owner fencing、有界预算和 partial_success 拒绝处理。已 delivered 事件不自动重发。
+
+验证证据：
+
+- 已执行冻结依赖同步、Ruff、mypy（63 source files）、14 份必需文档、diff check；前端 lint/typecheck、7 suites / 18 tests 和生产 build 均通过。
+- 服务端完整回归 **519 passed**，包含 NDK 27 / LLVM 18 的真实双 ELF 验证。Windows 默认 pytest Temp 深路径触发既有制品 `os.replace` 路径长度限制；使用短目录 `--basetemp C:/Users/xiazh/AppData/Local/Temp/as53e9` 重跑全部通过，未为此改变制品实现。结果记录在 `.local/statistics-backend-validation.log`。
+- 客户端针对实际改动执行 55 suites / **452 tests**，无失败/错误/跳过；model/core/trace API、24 个 baseline、Sample Debug/Release 构建、core/trace lint、47 Markdown / 86 links 通过。未重复完整 SDK CI，未进行真机安装/采集。
+- 当前客户端真实 `HttpApmUploader` V2/V3 → 服务端 loopback 联调通过：空 SQLite 升级九版、Gzip、提交后 exact ACK、typed/occurrence persistence、installation/session HMAC、device/OS、旧数据 unknown coverage、明文排除和重复重放。客户端日志 `.local/collector-statistics-e2e.log`。
+- 告警/设置实际 Chrome/Playwright 冒烟再次通过：独立 evaluator 自动触发、创建/确认/静默/停用、凭据创建/撤销及 viewer 会话失效、signed config 发布/回滚、深链刷新、390px 无页面横向溢出、404 和无 JS/console 错误。QA 规则/凭据清理完成，历史审计保留。截图与结果在 `.local/browser-evidence/`。
+- 本机无 Docker/PostgreSQL，6 项 PostgreSQL integration 明确 skip。用户明确先完成本地；生产 PostgreSQL/SigNoz/TLS/SSO/KMS、真实通知渠道和物理设备验收仍需对应环境。
+
+统计页面的最终浏览器结果及过期分类修复门禁在本节完成收尾时补录。操作见 [本地产品功能](11-本地产品功能.md)，完整统计目录见 [统计契约与口径](12-统计契约与口径.md)，决策见 [ADR 0011](adr/0011-运行会话统计与多信号导出.md)。
+
+## 2026-10-13 本地产品功能（历史）
+
+- 分支整理：保留完整 foundation tip `24f5b8b4a6a2de12e29887421362e53558783133`，本地重命名为 `main`，GitHub 默认分支改为 `main`，删除两个旧远端 codex 分支；`git branch -a` 与 `git ls-remote --symref origin HEAD refs/heads/*` 复核只有 main。后续产品代码为当前本地未提交改动。
+- 性能：normalization v3 和 70 个精确数值契约覆盖 13 个域，支持观测分布/版本差值/24 桶趋势、有效覆盖、GC availability、真实零/无效/缺失区分、迟到与发生版本质量。窗口/查询行数受限，超限拒绝而不返回部分统计；历史 raw 投影回填保持身份/hash/时钟不变，过期证据跳过。
+- 告警：八版 migration 持久化规则、firing episode 与通知 outbox，独立 evaluator、阈值/窗口/最少样本/版本限定、确认/静默/启停、可靠恢复、唯一 transition、有界重试、数据库时钟租约与 owner fencing。通知目的地只由服务端配置，Web 只见别名；本地没有真实渠道，未发送外部通知。
+- 设置：独立 admin、应用名称、有效运行/保留参数、scope 管线/制品元数据、Query/Ingest/CI 生命周期、一次显示 secret、signed config 发布/灰度/新 revision 回滚及安全审计。管理操作强制 scope/RBAC/CSRF；既有角色未自动升权，浏览器不保存 raw key。
+- Web：性能/告警/设置替换能力缺口页，admin 继承 investigator 诊断权限；修复显式深链刷新，保留未知 API/页面 404。新增控件标签、内部表格滚动和深浅主题；已实际检查桌面与 390px 视图。
+- 本地启动：`scripts/start-local.ps1` 支持 `-PrepareOnly`/`-ClientRepo`，准备独立忽略配置/短期凭据/合成事件/八版 migration/backfill，隐藏启动保留维护与告警进程，Ctrl+C 统一停止。Android Sample Debug 使用忽略 properties、V3 发生身份/稳定安装/动态 headers/签名配置与 debug HTTP；Release 七项接入字段为空，offline/control 优先。
+
+验证证据：
+
+- frozen uv sync、Ruff、mypy 59 source files、13 份必需文档及 diff check 通过。后端全测使用 NDK 27 / LLVM 18，包括真实双 ELF symbolizer 回归；最新结果为 **287 tests passed**。产品新增 83 项覆盖精确目录、权限/CSRF/租户、凭据、签名回滚、告警状态/通知/失租、UTC 和历史回填。
+- 前端 lint/typecheck、7 suites / 18 Vitest tests、生产 build 通过；JS 316.44 kB / gzip 99.72 kB。真实 Chrome/Playwright 冒烟通过：深链登录/刷新、性能筛选/趋势、独立进程自动触发和手动评估、确认/静默/停用、创建/撤销/viewer 会话失效、配置发布/回滚、窄屏无页面横向溢出、未知路径 404、无浏览器 JS/console 错误。截图及结果：`.local/browser-evidence/`；QA 规则停用、QA key 撤销，历史保留。
+- 客户端 JDK 17 的 Sample `assembleDebug/assembleRelease/lintDebug` 通过，无 lint error。四组严格依赖 metadata、47 Markdown / 83 links、Release 空配置和 gitignore 复核通过；没有因仅 Sample 接入重复完整 886 项 SDK CI。
+- 真实客户端 `HttpApmUploader` V2/V3 → FastAPI loopback E2E 通过：空 SQLite 升级八版、Gzip、提交后 exact ACK、typed/occurrence persistence、HMAC/明文排除与重放去重。日志：服务端 `.local/product-backend-validation.log`、客户端 `.local/collector-product-e2e.log` 与 `.local-server-build.log`。
+- Compose 两份 YAML 和 alerts service 配置静态解析通过；本机无 Docker/PostgreSQL，6 项 PostgreSQL integration 因无 `APM_TEST_POSTGRES_URL` 全部 skip，不计为通过。没有物理设备安装/运行、生产 TLS/SSO/KMS/SigNoz 或真实通知验收；标准 session/device/OS 和 Trace/OTLP Metrics 跨仓契约仍待建设。
+
+操作见 [本地产品功能](11-本地产品功能.md)，架构见 [ADR 0010](adr/0010-本地性能告警与管理面.md)。用户已明确先做本地，生产环境尚未准备。
 
 ## 2026-09-12 顺序整改
 
@@ -207,7 +266,7 @@ uv run python scripts/verify_docs.py
 - Foundation 提交的 GitHub CI 已两次通过 PostgreSQL 16.9 migration round-trip、并发 Inbox/`SKIP LOCKED`、Compose config 和镜像 build。本次 M3 变更新增并发 artifact identity 测试；在对应 PR workflow 运行前仍属于待验证变更。
 - Dashboard/alert JSON 已按 SigNoz `v0.133.0` 当前官方 v2 API 源码编写并做离线测试，但还没有由真实 SigNoz 校验查询表达式和渲染结果。
 - Java/Native 制品 API、私有本地/持久卷 store、任务状态机和工具 adapter 已实现；生产对象存储/KMS、固定 R8/LLVM 工具镜像、真实 mapping/ELF/crash E2E 尚未完成。基础镜像没有工具二进制，`APM_SYMBOLIZATION_ENABLED` 默认 `false`。
-- OTLP Metrics 独立信号、Trace context、托管诊断 UI、生产身份系统/RLS/KMS/HSM、真实多租户部署、备份/PITR、TLS/WAF、压测/72h soak 尚未验收；fixed-scope Query/BFF 本地实现不属于这些现场完成项。
+- OTLP Metrics 独立信号、Trace context、生产托管诊断 UI/身份系统/RLS/KMS/HSM、真实多租户部署、备份/PITR、TLS/WAF、压测/72h soak 尚未验收；本地 Query/BFF/Web 已实现不等于生产现场完成。
 - Android SDK 已有动态 header/endpoint provider、签名远程配置、V2 兼容 resource 和 V3 occurrence identity；生产凭据签发/轮换及服务端部署联调仍待完成。精确符号化 schema 已能保存 versionCode/variant/ABI/build-id/module-relative pc，但真实 Java/Native crash 采集、工具和制品 fixture 仍不足以完成现场验收。
 
 ## 下一步顺序

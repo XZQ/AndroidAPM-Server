@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import select
 from sqlalchemy.engine import make_url
 
@@ -24,14 +29,19 @@ from androidapm_server.domain import (
     OccurrenceContext,
 )
 from androidapm_server.identity import InstallationHmacKeyRing
+from androidapm_server.performance_catalog import (
+    DIMENSION_FIELDS,
+    EVENT_CATALOG,
+    PERFORMANCE_FIELDS,
+)
 from androidapm_server.query_auth import generate_query_key
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = (ROOT / ".local").resolve()
 TENANT_ID = "local-preview"
 TENANT_NAME = "Local Preview"
-APP_ID = "com.example.androidapm"
-ENVIRONMENT = "production"
+APP_ID = "com.apm.sample.debug"
+ENVIRONMENT = "local"
 
 
 async def seed_local_preview() -> tuple[str, str, int, int]:
@@ -62,7 +72,7 @@ async def seed_local_preview() -> tuple[str, str, int, int]:
                     key_hash=query_hash,
                     app_id=APP_ID,
                     environment=ENVIRONMENT,
-                    role="investigator",
+                    role="admin",
                     description="Local Web preview; expires after one day",
                     expires_at=expires_at,
                 ),
@@ -86,7 +96,8 @@ async def seed_local_preview() -> tuple[str, str, int, int]:
         bucket_seconds = 6 * 60 * 60
         bucket_epoch = int(now.timestamp()) // bucket_seconds * bucket_seconds
         occurrence_ms = (bucket_epoch - 5 * 60) * 1_000
-        bucket_id = datetime.fromtimestamp(bucket_epoch, tz=UTC).strftime("%Y%m%d%H")
+        # A contract revision gets a distinct immutable identity; never rewrite old replay hashes.
+        bucket_id = "v4b-" + datetime.fromtimestamp(bucket_epoch, tz=UTC).strftime("%Y%m%d%H")
         result = await insert_batch(
             session,
             _metadata(f"local-preview-{bucket_id}"),
@@ -100,7 +111,7 @@ async def seed_local_preview() -> tuple[str, str, int, int]:
                 schema_version="2",
                 protocol="protobuf-envelope-v2",
                 app_version="2.0.0",
-                installation_id=f"preview-v2-{bucket_id}",
+                installation_id=f"synthetic-v2-installation-{bucket_id}",
                 release_quality=IdentityQuality.BATCH_DECLARED,
                 installation_quality=IdentityQuality.BATCH_DECLARED,
             ),
@@ -196,6 +207,117 @@ def _fixture_events(bucket_id: str, timestamp_ms: int) -> list[ApmEvent]:
             "new-b",
         ),
     ]
+    grouped: dict[tuple[str, str], dict[str, object]] = {}
+    for contract in EVENT_CATALOG:
+        if (contract.module, contract.name) not in {
+            ("core", "session_start"),
+            ("crash", "app_exit"),
+        }:
+            grouped[(contract.module, contract.name)] = {}
+    for field in PERFORMANCE_FIELDS:
+        fields = grouped.setdefault((field.module, field.name), {})
+        fields[field.field] = (
+            0.1 if field.unit == "ratio" else -0.02 if field.unit == "ratio_delta" else 20
+        )
+        if field.availability_field is not None:
+            fields[field.availability_field] = True
+        if field.sample_count_field is not None:
+            fields[field.sample_count_field] = 20
+    for dimension in DIMENSION_FIELDS:
+        fields = grouped[(dimension.module, dimension.name)]
+        fields[dimension.field] = (
+            True
+            if dimension.field_type == "boolean"
+            else int(dimension.allowed_values[0])
+            if dimension.field_type == "integer"
+            else dimension.allowed_values[0]
+        )
+    grouped[("core", "sdk_health")].update({"emitCount": 100, "dropCount": 0, "dropRate": 0.0})
+    grouped[("network", "network_aggregate")].update(
+        {"totalRequests": 100, "errorCount": 5, "successCount": 95}
+    )
+    grouped[("fps", "fps_stats")].update(
+        {"fps": 60, "windowDurationMs": 1000, "frameCount": 60, "jankCount": 3}
+    )
+    for index, ((module, name), fields) in enumerate(grouped.items()):
+        for release in ("1.0.0", "2.0.0"):
+            specs.append(
+                (
+                    f"perf-{index}-{release}",
+                    module,
+                    name,
+                    fields,
+                    release,
+                    f"perf-installation-{release}",
+                )
+            )
+    for suffix, name in (("native", "native_crash"), ("tombstone", "tombstone_crash")):
+        specs.append(
+            (
+                f"new-{suffix}",
+                "crash",
+                name,
+                {
+                    "signal": 11,
+                    "signalName": "SIGSEGV",
+                    "backtrace": "#00 pc 00001234 /data/app/libsample.so (checkout+8)",
+                },
+                "2.0.0",
+                "new-a",
+            )
+        )
+    trace_id = uuid5(NAMESPACE_URL, f"androidapm.preview.trace/{bucket_id}").hex
+    for suffix, span_id, parent_id, start, end in (
+        ("root", "b" * 16, "", timestamp_ms, timestamp_ms + 400),
+        ("child", "c" * 16, "b" * 16, timestamp_ms + 50, timestamp_ms + 250),
+    ):
+        specs.append(
+            (
+                f"trace-{suffix}",
+                "trace",
+                f"checkout.{suffix}",
+                {
+                    "traceId": trace_id,
+                    "spanId": span_id,
+                    **({"parentSpanId": parent_id} if parent_id else {}),
+                    "duration_ms": end - start,
+                    "startTimestampMs": start,
+                    "endTimestampMs": end,
+                    "spanSchemaVersion": 2,
+                    "status": "OK",
+                    "attr_private": "synthetic evidence requires raw audit",
+                },
+                "2.0.0",
+                "new-b",
+            )
+        )
+    specs.append(
+        (
+            "legacy-span",
+            "trace",
+            "legacy.checkout",
+            {
+                "traceId": uuid5(NAMESPACE_URL, f"androidapm.preview.legacy/{bucket_id}").hex,
+                "spanId": "e" * 16,
+                "duration_ms": 80,
+                "status": "OK",
+            },
+            "2.0.0",
+            "new-b",
+        )
+    )
+    installations = {(release, installation) for _, _, _, _, release, installation in specs}
+    for index, (release, installation) in enumerate(sorted(installations)):
+        specs.append(
+            (
+                f"session-start-{index}",
+                "core",
+                "session_start",
+                {"session_schema_version": 1, "session_count": 1},
+                release,
+                installation,
+            )
+        )
     return [
         _event(
             f"preview-{bucket_id}-{suffix}",
@@ -220,7 +342,12 @@ def _event(
     timestamp_ms: int,
 ) -> ApmEvent:
     """Build one V3-shaped occurrence event for the local scenario."""
-    incident = (module, name) in {("crash", "java_crash"), ("anr", "anr_detected")}
+    incident = (module, name) in {
+        ("crash", "java_crash"),
+        ("anr", "anr_detected"),
+        ("crash", "native_crash"),
+        ("crash", "tombstone_crash"),
+    }
     return ApmEvent(
         timestamp=timestamp_ms,
         event_id=event_id,
@@ -240,6 +367,11 @@ def _event(
             app_build=f"preview-build-{release}",
             variant="debug",
             installation_id=installation_id,
+            session_id=str(
+                uuid5(NAMESPACE_URL, f"androidapm.local/{timestamp_ms}/{release}/{installation_id}")
+            ),
+            device_model="Example/PreviewPhone",
+            os_version="14/API 34",
         ),
     )
 
@@ -320,14 +452,51 @@ def _assert_local_database(environment: str, database_url: str) -> None:
 
 
 def main() -> None:
-    """Seed the scenario and print short-lived local credentials exactly once."""
+    """Seed the scenario and write development secrets only to ignored local files."""
     query_key, ingest_key, inserted, compatibility_inserted = asyncio.run(seed_local_preview())
+    LOCAL_ROOT.mkdir(exist_ok=True)
+    credentials_path = LOCAL_ROOT / "local-credentials.json"
+    credentials_path.write_text(
+        json.dumps(
+            {
+                "queryKey": query_key,
+                "ingestKey": ingest_key,
+                "appId": APP_ID,
+                "environment": ENVIRONMENT,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    properties = [
+        "# Local debug only; contains a short-lived ingest key. Never commit this file.",
+        "apm.collector.endpoint=http://127.0.0.1:8080/v1/events",
+        f"apm.collector.key={ingest_key}",
+        f"apm.collector.appId={APP_ID}",
+        f"apm.collector.environment={ENVIRONMENT}",
+    ]
+    settings = get_settings()
+    if settings.remote_config_signing_private_key_b64 is not None:
+        key = Ed25519PrivateKey.from_private_bytes(
+            base64.b64decode(settings.remote_config_signing_private_key_b64.get_secret_value())
+        )
+        public = base64.b64encode(
+            key.public_key().public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw
+            )
+        ).decode()
+        properties += [
+            "apm.config.endpoint=http://127.0.0.1:8080/v1/config",
+            f"apm.config.publicKey={public}",
+            f"apm.config.keyId={settings.remote_config_public_key_id}",
+        ]
+    (LOCAL_ROOT / "apm-collector.properties").write_text(
+        "\n".join(properties) + "\n", encoding="utf-8"
+    )
     print("Local synthetic preview prepared.")
     print(f"New V3 fixture rows: {inserted}; new V2 compatibility rows: {compatibility_inserted}")
-    print("Query key (paste into http://127.0.0.1:8080; expires in one day):")
-    print(query_key)
-    print("Ingest key (configure only in a local Android debug build; expires in one day):")
-    print(ingest_key)
+    print(f"Short-lived local credentials: {credentials_path}")
+    print(f"Android debug configuration: {LOCAL_ROOT / 'apm-collector.properties'}")
 
 
 if __name__ == "__main__":

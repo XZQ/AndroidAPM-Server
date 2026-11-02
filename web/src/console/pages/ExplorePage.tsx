@@ -1,3 +1,4 @@
+import { canInvestigate } from "../../permissions";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { ArrowRight, Filter, Search } from "lucide-react";
 import { Link, useOutletContext } from "react-router-dom";
@@ -21,7 +22,7 @@ export function ExplorePage() {
   const begin = useRequestGuard();
 
   const load = useCallback(async (cursor?: string) => {
-    if (session.role !== "investigator") return;
+    if (!canInvestigate(session.role)) return;
     const current = begin();
     if (cursor === undefined) setPage(null);
     setLoading(true); setError(null);
@@ -39,7 +40,7 @@ export function ExplorePage() {
     setActive({ module: module.trim(), name: name.trim() });
   }
   const appPath = `/apps/${encodeURIComponent(session.scope.appId)}`;
-  if (session.role !== "investigator") {
+  if (!canInvestigate(session.role)) {
     return <div className="console-page"><PageHeader title="事件探索" description="安装级事件属于 L1 数据" /><EmptyPanel title="需要调查员权限" message="当前 viewer 凭据只能读取 L0 聚合。" /></div>;
   }
   return (

@@ -45,6 +45,80 @@ def fact(**changes: object) -> QueryFact:
     return replace(base, **changes)
 
 
+def test_explicit_runtime_session_rates_deduplicate_incidents_and_exclude_tombstones() -> None:
+    context = {"session_identity_quality": "OCCURRENCE_BOUND", "session_hmac_key_version": "v1"}
+    facts = [
+        fact(**context, session_hmac="session-a"),
+        fact(**context, session_hmac="session-b"),
+        fact(**context, session_hmac="session-a", name="session_start", session_start_valid=True),
+        fact(**context, session_hmac="session-b", name="session_start", session_start_valid=True),
+        fact(**context, session_hmac="session-a", module="crash", name="native_crash", weight=3),
+        fact(**context, session_hmac="session-a", module="crash", name="java_crash"),
+        fact(**context, session_hmac="session-b", module="anr", name="anr_detected"),
+        fact(module="crash", name="tombstone_crash", weight=8),
+    ]
+    response = build_release_health(
+        "r", PRINCIPAL, facts, "new", "old", TIME - 1, TIME + 1, 1000, 1
+    )
+    metrics = response.new_release.metrics
+    assert metrics.native_crash_events.value == 3 and metrics.native_tombstone_events.value == 8
+    assert metrics.crash_free_sessions.state == "PRESENT"
+    assert metrics.crash_free_sessions.value == 0.5
+    assert (
+        metrics.crash_free_sessions.denominator == 2 and metrics.crash_free_sessions.numerator == 1
+    )
+    assert metrics.anr_free_sessions.value == 0.5
+    assert sum(point.new_native_tombstone_events or 0 for point in response.trend) == 8
+
+
+@pytest.mark.parametrize(
+    "case,reason",
+    [
+        ("legacy", "SESSION_IDENTITY_COVERAGE_INCOMPLETE"),
+        ("no_start", "SESSION_START_NOT_IN_WINDOW"),
+        ("rotation", "SESSION_KEY_ROTATION_BREAKS_CONTINUITY"),
+        ("drops", "SDK_REPORTED_DROPS"),
+    ],
+)
+def test_session_rates_never_invent_coverage(case: str, reason: str) -> None:
+    context = {
+        "session_identity_quality": "OCCURRENCE_BOUND",
+        "session_hmac_key_version": "v1",
+        "session_hmac": "s",
+    }
+    facts = [fact(**context), fact(**context, name="session_start", session_start_valid=True)]
+    if case == "legacy":
+        facts.append(fact(module="network", name="network_request"))
+    elif case == "no_start":
+        facts = facts[:1]
+    elif case == "rotation":
+        facts.append(replace(facts[0], session_hmac_key_version="v2"))
+    elif case == "drops":
+        facts[0] = replace(facts[0], sdk_drop_count=1, sdk_drop_rate=0.1)
+    result = build_release_health("r", PRINCIPAL, facts, "new", "old", TIME - 1, TIME + 1, 1000, 1)
+    assert result.new_release.metrics.crash_free_sessions.value is None
+    assert result.new_release.metrics.crash_free_sessions.reason == reason
+
+
+def test_issue_resource_distributions_are_weighted_and_keep_missing_coverage() -> None:
+    facts = [
+        fact(
+            module="crash",
+            name="native_crash",
+            incident_fingerprint="f" * 64,
+            device_model="Example/Model",
+            os_version="14/API 34",
+            weight=7,
+        ),
+        fact(module="crash", name="native_crash", incident_fingerprint="f" * 64, weight=3),
+    ]
+    detail = build_issue_detail("r", PRINCIPAL, facts, "f" * 64, TIME - 1, TIME + 1)
+    assert detail.event_family == "NATIVE_CRASH"
+    assert detail.device_models.state == "DEGRADED"
+    assert detail.device_models.items[0].event_count == 7
+    assert detail.android_versions.coverage.missing_event_count == 3
+
+
 @pytest.mark.parametrize(
     ("scene_state", "reason", "counter"),
     [

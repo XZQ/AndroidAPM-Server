@@ -1,5 +1,9 @@
 # SDK ↔ Collector 协议
 
+2026-11-02 契约核对：下述 session/device/OS、session_start 和 span v2 描述是服务端已接受的可选扩展及 SDK 待实现契约。当前 AndroidAPM 客户端仍为 durable V4，其 proto 没有 occurrence 字段 7–9，也未发送标准 session_start 或 span v2 起止。旧客户端继续使用 V3/exact ACK；服务端不补当前身份、不改变旧 hash。校验器仅容许这三个精确 optional string 扩展，仍拒绝既有字段或未审查字段漂移。
+
+2026-10-14 additive V3：occurrence 追加 optional `session_id=7`、`device_model=8`、`os_version=9`，旧字段号/schema/batch ID/exact ACK 不变。session 是 SDK init/stop 生命周期的匿名 UUID，device/OS 是标准 Build 资源；客户端 durable V5 向后读取 V1–V4，不给旧事件补新身份。`core/session_start` 用 CRITICAL 同步 handoff，整数 `session_schema_version=1`、`session_count=1`；Trace 追加 `spanSchemaVersion=2` 与真实 epoch 起止，单调 duration 不变。服务器 HMAC 移除已知 installation/session 明文；缺 optional 字段不改变旧 V3 canonical hash。完整决策见 [ADR 0011](adr/0011-运行会话统计与多信号导出.md)。
+
 2026-09-12：serviceVersion/appBuild/variant 继续支持 1–256 UTF-8 bytes。迁移 `20260912_0006` 将 inbox、symbol artifact 和 release decision 相应字段扩宽为 VARCHAR(256)，接收 header、制品 header、Query 过滤和发布决策同步使用 256-byte 校验。先迁移再更新服务；已有超过 128 字符的值会阻止缩窄迁移，禁止截断身份。SDK 协议和发生时快照不变，超出 256 bytes 的事件仍整批拒绝并不给成功 ACK。
 
 ## v1 接口

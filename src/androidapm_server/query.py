@@ -41,7 +41,11 @@ SESSION_UNAVAILABLE_REASON = "SESSION_ID_NOT_PROVIDED"
 OCCURRENCE_UNAVAILABLE_REASON = "OCCURRENCE_IDENTITY_NOT_PROVIDED"
 INSTALLATION_UNAVAILABLE_REASON = "INSTALLATION_IDENTITY_NOT_PROVIDED"
 SDK_HEALTH_UNAVAILABLE_REASON = "SDK_HEALTH_NOT_PROVIDED"
-INCIDENT_EVENTS = frozenset({("crash", "java_crash"), ("anr", "anr_detected")})
+LIVE_INCIDENT_EVENTS = frozenset(
+    {("crash", "java_crash"), ("anr", "anr_detected"), ("crash", "native_crash")}
+)
+INCIDENT_EVENTS = LIVE_INCIDENT_EVENTS | {("crash", "tombstone_crash")}
+HISTORICAL_EVENTS = frozenset({("crash", "app_exit"), ("crash", "tombstone_crash")})
 
 
 def _to_camel(value: str) -> str:
@@ -93,6 +97,8 @@ class ReleaseMetricSet(QueryModel):
     """First-slice metrics for one occurrence-bound Android release."""
 
     java_crash_events: MetricResult
+    native_crash_events: MetricResult
+    native_tombstone_events: MetricResult
     anr_events: MetricResult
     affected_installations: MetricResult
     active_installations: MetricResult
@@ -121,6 +127,8 @@ class ReleaseComparison(QueryModel):
     """Simple deltas that remain null whenever either source metric is unavailable."""
 
     java_crash_event_delta: int | None
+    native_crash_event_delta: int | None
+    native_tombstone_event_delta: int | None
     anr_event_delta: int | None
     affected_installation_delta: int | None
     affected_installation_ratio_delta: float | None
@@ -135,6 +143,10 @@ class ReleaseTrendPoint(QueryModel):
     new_anr_events: int | None
     baseline_java_crash_events: int | None
     baseline_anr_events: int | None
+    new_native_crash_events: int | None
+    baseline_native_crash_events: int | None
+    new_native_tombstone_events: int | None
+    baseline_native_tombstone_events: int | None
     new_state: str
     baseline_state: str
 
@@ -248,6 +260,9 @@ class DataQualityResponse(QueryModel):
     inbox_status_counts: dict[str, int]
     release_identity: MetricResult
     installation_identity: MetricResult
+    session_identity: MetricResult
+    device_model_coverage: MetricResult
+    os_version_coverage: MetricResult
     sdk_health: MetricResult
     late_data: MetricResult
 
@@ -276,6 +291,9 @@ class EventSummary(QueryModel):
     release_identity_quality: str
     installation_identity_quality: str
     installation_hmac: str | None
+    session_identity_quality: str
+    device_model: str | None
+    os_version: str | None
     occurrence_timestamp_ms: int
     collection_timestamp_ms: int | None
     received_at: datetime
@@ -335,6 +353,8 @@ class ReleaseEvidence(QueryModel):
     release_state: str
     baseline_state: str | None = None
     java_crash_events: int | None = Field(default=None, ge=0)
+    native_crash_events: int | None = Field(default=None, ge=0)
+    native_tombstone_events: int | None = Field(default=None, ge=0)
     anr_events: int | None = Field(default=None, ge=0)
     affected_installations: int | None = Field(default=None, ge=0)
     active_installations: int | None = Field(default=None, ge=0)
@@ -440,6 +460,13 @@ def build_release_health(
             java_crash_event_delta=_metric_delta(
                 new_slice.metrics.java_crash_events,
                 baseline_slice.metrics.java_crash_events,
+            ),
+            native_crash_event_delta=_metric_delta(
+                new_slice.metrics.native_crash_events, baseline_slice.metrics.native_crash_events
+            ),
+            native_tombstone_event_delta=_metric_delta(
+                new_slice.metrics.native_tombstone_events,
+                baseline_slice.metrics.native_tombstone_events,
             ),
             anr_event_delta=_metric_delta(
                 new_slice.metrics.anr_events,
@@ -572,17 +599,17 @@ def build_issue_detail(
             fact.scene_state or (EVIDENCE_AVAILABLE if fact.scene else EVIDENCE_MISSING)
         ),
     )
-    unavailable_resource = IssueDistribution(
-        dimension="device_model",
-        state=QUERY_STATE_UNKNOWN_COVERAGE,
-        reason="STANDARD_DEVICE_RESOURCE_NOT_PROVIDED",
-        items=[],
+    unavailable_resource = _issue_distribution(
+        "device_model",
+        eligible,
+        lambda fact: fact.device_model,
+        unavailable_reason="STANDARD_DEVICE_RESOURCE_NOT_PROVIDED",
     )
-    unavailable_os = IssueDistribution(
-        dimension="android_version",
-        state=QUERY_STATE_UNKNOWN_COVERAGE,
-        reason="STANDARD_OS_RESOURCE_NOT_PROVIDED",
-        items=[],
+    unavailable_os = _issue_distribution(
+        "android_version",
+        eligible,
+        lambda fact: fact.os_version,
+        unavailable_reason="STANDARD_OS_RESOURCE_NOT_PROVIDED",
     )
     return IssueDetailResponse(
         request_id=request_id,
@@ -728,9 +755,11 @@ def _release_incident_trend(
             grouped[bucket_index].append(fact)
     points: list[ReleaseTrendPoint] = []
     for index in range(bucket_count):
-        new_java, new_anr, new_state = _bucket_incidents(grouped[index], new_release)
-        baseline_java, baseline_anr, baseline_state = _bucket_incidents(
-            grouped[index], baseline_release
+        new_java, new_anr, new_native, new_tombstone, new_state = _bucket_incidents(
+            grouped[index], new_release
+        )
+        baseline_java, baseline_anr, baseline_native, baseline_tombstone, baseline_state = (
+            _bucket_incidents(grouped[index], baseline_release)
         )
         bucket_start = from_ms + index * bucket_ms
         points.append(
@@ -741,6 +770,10 @@ def _release_incident_trend(
                 new_anr_events=new_anr,
                 baseline_java_crash_events=baseline_java,
                 baseline_anr_events=baseline_anr,
+                new_native_crash_events=new_native,
+                baseline_native_crash_events=baseline_native,
+                new_native_tombstone_events=new_tombstone,
+                baseline_native_tombstone_events=baseline_tombstone,
                 new_state=new_state,
                 baseline_state=baseline_state,
             )
@@ -748,24 +781,32 @@ def _release_incident_trend(
     return points
 
 
-def _bucket_incidents(facts: list[QueryFact], release: str) -> tuple[int | None, int | None, str]:
+def _bucket_incidents(
+    facts: list[QueryFact], release: str
+) -> tuple[int | None, int | None, int | None, int | None, str]:
     """Distinguish absent, declared-only and observed zero counts for one release bucket."""
     declared = [fact for fact in facts if fact.app_version == release]
     eligible = [fact for fact in declared if _occurrence_bound(fact)]
     if not declared:
-        return None, None, QUERY_STATE_NO_DATA
+        return None, None, None, None, QUERY_STATE_NO_DATA
     if not eligible:
-        return None, None, QUERY_STATE_UNAVAILABLE
+        return None, None, None, None, QUERY_STATE_UNAVAILABLE
     java = sum(
         fact.weight for fact in eligible if (fact.module, fact.name) == ("crash", "java_crash")
     )
     anr = sum(
         fact.weight for fact in eligible if (fact.module, fact.name) == ("anr", "anr_detected")
     )
-    state = QUERY_STATE_PRESENT if java or anr else QUERY_STATE_ZERO
+    native = sum(
+        fact.weight for fact in eligible if (fact.module, fact.name) == ("crash", "native_crash")
+    )
+    tombstone = sum(
+        fact.weight for fact in eligible if (fact.module, fact.name) == ("crash", "tombstone_crash")
+    )
+    state = QUERY_STATE_PRESENT if java or anr or native or tombstone else QUERY_STATE_ZERO
     if len(eligible) < len(declared):
         state = QUERY_STATE_DEGRADED
-    return java, anr, state
+    return java, anr, native, tombstone, state
 
 
 def build_data_quality(
@@ -856,6 +897,24 @@ def build_data_quality(
         ),
         release_identity=release_metric,
         installation_identity=installation_metric,
+        session_identity=_coverage_metric(
+            sum(fact.weight for fact in selected if _occurrence_bound(fact) and fact.session_hmac),
+            occurrence_count,
+            to_ms,
+            SESSION_UNAVAILABLE_REASON,
+        ),
+        device_model_coverage=_coverage_metric(
+            sum(fact.weight for fact in selected if _occurrence_bound(fact) and fact.device_model),
+            occurrence_count,
+            to_ms,
+            "STANDARD_DEVICE_RESOURCE_NOT_PROVIDED",
+        ),
+        os_version_coverage=_coverage_metric(
+            sum(fact.weight for fact in selected if _occurrence_bound(fact) and fact.os_version),
+            occurrence_count,
+            to_ms,
+            "STANDARD_OS_RESOURCE_NOT_PROVIDED",
+        ),
         sdk_health=sdk_metric,
         late_data=late_metric,
     )
@@ -887,6 +946,9 @@ def event_summary(event: InboxEvent) -> EventSummary:
         release_identity_quality=event.release_identity_quality,
         installation_identity_quality=event.installation_identity_quality,
         installation_hmac=event.installation_hmac,
+        session_identity_quality=event.session_identity_quality,
+        device_model=event.device_model,
+        os_version=event.os_version,
         occurrence_timestamp_ms=event.occurrence_timestamp_ms,
         collection_timestamp_ms=event.collection_timestamp_ms,
         received_at=_aware(event.received_at),
@@ -1014,12 +1076,18 @@ def _release_slice(
     """Build quality-gated metrics for one explicit release value."""
     declared = [fact for fact in facts if fact.app_version == release_version]
     eligible = [fact for fact in declared if _occurrence_bound(fact)]
-    incidents = [fact for fact in eligible if (fact.module, fact.name) in INCIDENT_EVENTS]
+    incidents = [fact for fact in eligible if (fact.module, fact.name) in LIVE_INCIDENT_EVENTS]
     java_count = sum(
         fact.weight for fact in incidents if (fact.module, fact.name) == ("crash", "java_crash")
     )
     anr_count = sum(
         fact.weight for fact in incidents if (fact.module, fact.name) == ("anr", "anr_detected")
+    )
+    native_count = sum(
+        fact.weight for fact in eligible if (fact.module, fact.name) == ("crash", "native_crash")
+    )
+    tombstone_count = sum(
+        fact.weight for fact in eligible if (fact.module, fact.name) == ("crash", "tombstone_crash")
     )
     active_installations = {
         fact.installation_hmac for fact in eligible if fact.installation_hmac is not None
@@ -1214,11 +1282,8 @@ def _release_slice(
             reason=gate_reason,
         )
         quality_state = gate_state
-    session_metric = _metric(
-        QUERY_STATE_UNAVAILABLE,
-        as_of_ms,
-        _sample_count(eligible),
-        reason=SESSION_UNAVAILABLE_REASON,
+    crash_sessions, anr_sessions = _session_metrics(
+        declared, eligible, as_of_ms, gate_state, gate_reason
     )
     return ReleaseSlice(
         release_version=release_version,
@@ -1230,6 +1295,12 @@ def _release_slice(
         installation_identity_coverage=installation_coverage,
         metrics=ReleaseMetricSet(
             java_crash_events=java_metric,
+            native_crash_events=_count_metric(
+                native_count, _sample_count(eligible), as_of_ms, quality_state, quality_reason
+            ),
+            native_tombstone_events=_count_metric(
+                tombstone_count, _sample_count(eligible), as_of_ms, quality_state, quality_reason
+            ),
             anr_events=anr_metric,
             affected_installations=affected_metric,
             active_installations=active_metric,
@@ -1237,10 +1308,79 @@ def _release_slice(
             incident_fingerprint_count=fingerprint_metric,
             late_ratio=late_metric,
             sdk_drop_rate=sdk_metric,
-            crash_free_sessions=session_metric.model_copy(),
-            anr_free_sessions=session_metric.model_copy(),
+            crash_free_sessions=crash_sessions,
+            anr_free_sessions=anr_sessions,
         ),
     )
+
+
+def _session_metrics(
+    declared: list[QueryFact],
+    eligible: list[QueryFact],
+    as_of_ms: int,
+    gate_state: str,
+    gate_reason: str | None,
+) -> tuple[MetricResult, MetricResult]:
+    """Count explicitly started SDK runtime sessions; never infer sessions from other events."""
+    runtime = [fact for fact in eligible if (fact.module, fact.name) not in HISTORICAL_EVENTS]
+    known = [
+        fact
+        for fact in runtime
+        if fact.session_hmac is not None
+        and fact.session_identity_quality == IdentityQuality.OCCURRENCE_BOUND.value
+    ]
+    starts = {
+        (fact.session_hmac_key_version, fact.session_hmac)
+        for fact in known
+        if fact.session_start_valid
+    }
+    observed = {(fact.session_hmac_key_version, fact.session_hmac) for fact in known}
+    coverage = _sample_count(known) / _sample_count(runtime) if runtime else None
+    reason: str | None = None
+    state = QUERY_STATE_PRESENT
+    if not declared:
+        state = QUERY_STATE_NO_DATA
+    elif not known:
+        state, reason = QUERY_STATE_UNAVAILABLE, SESSION_UNAVAILABLE_REASON
+    elif len({fact.session_hmac_key_version for fact in known}) > 1:
+        state, reason = QUERY_STATE_UNAVAILABLE, "SESSION_KEY_ROTATION_BREAKS_CONTINUITY"
+    elif coverage != 1 or _sample_count(eligible) != _sample_count(declared):
+        state, reason = QUERY_STATE_UNKNOWN_COVERAGE, "SESSION_IDENTITY_COVERAGE_INCOMPLETE"
+    elif not starts or observed - starts:
+        state, reason = QUERY_STATE_UNKNOWN_COVERAGE, "SESSION_START_NOT_IN_WINDOW"
+    elif gate_state != QUERY_STATE_PRESENT:
+        state, reason = gate_state, gate_reason
+    failures = (
+        {
+            (fact.session_hmac_key_version, fact.session_hmac)
+            for fact in known
+            if (fact.module, fact.name) in {("crash", "java_crash"), ("crash", "native_crash")}
+        },
+        {
+            (fact.session_hmac_key_version, fact.session_hmac)
+            for fact in known
+            if (fact.module, fact.name) == ("anr", "anr_detected")
+        },
+    )
+    results = []
+    for affected in failures:
+        denominator = len(starts)
+        numerator = denominator - len(affected & starts)
+        results.append(
+            _metric(
+                state,
+                as_of_ms,
+                _sample_count(runtime),
+                value=numerator / denominator
+                if state == QUERY_STATE_PRESENT and denominator
+                else None,
+                numerator=numerator if denominator else None,
+                denominator=denominator if denominator else None,
+                coverage=coverage,
+                reason=reason,
+            )
+        )
+    return results[0], results[1]
 
 
 def _valid_sdk_health(fact: QueryFact) -> bool:
@@ -1443,9 +1583,12 @@ def _event_family(module: str, name: str) -> str:
     """Map only exact product events; crash-module membership alone is insufficient."""
     return {
         ("crash", "java_crash"): "JAVA_CRASH",
+        ("crash", "native_crash"): "NATIVE_CRASH",
+        ("crash", "tombstone_crash"): "NATIVE_TOMBSTONE",
         ("anr", "anr_detected"): "ANR",
         ("crash", "app_exit"): "APP_EXIT",
         ("core", "sdk_health"): "SDK_HEALTH",
+        ("core", "session_start"): "SESSION_START",
     }.get((module, name), "UNREGISTERED")
 
 

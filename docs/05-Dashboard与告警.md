@@ -1,5 +1,7 @@
 # 真实场景、查询、Dashboard 与告警
 
+> 当前实现补充：2026-10-14。本地已实现 Native Crash/Tombstone 分开统计、243 个数值字段、66 个精确事件、29 个固定类别、会话率、标准设备/OS 分布、手动 Trace 页面及可选 OTLP Metrics/Traces。会话率仅在真实 session_start 和质量门禁满足时显示；历史字段缺失、分类过期和旧 Trace 缺起止仍显示真实不可用原因。当前功能与统计口径见 [本地产品功能](11-本地产品功能.md) 和 [统计契约](12-统计契约与口径.md)；以下场景基线保留历史设计背景。
+
 > 场景基线：2026-08-28。查询口径必须以 `docs/04-OTLP映射与SigNoz.md` 的真实事件目录为准；本文不是“把 15 个模块各画一页”的面板清单。
 
 ## 目标用户与入口
@@ -22,7 +24,7 @@
 - 三个最高频任务依次是：比较新旧版本 Crash/ANR 健康、从指纹下钻到可审计证据、定位无数据或质量降级发生在哪一层。
 - 产品形态是 desktop-first 的诊断 Dashboard + 发布决策工作流。窄屏浏览器只承担告警分诊、关键状态确认和深链跳转；当前不规划独立移动 App。
 - 第一可用版本不自动操作发布系统，不把共享 SigNoz UI 当多租户产品界面，不提供未经 occurrence/session/coverage 支撑的指标，也不把密钥、租户、制品和配置管理混入普通诊断导航。
-- 当前已实现 fixed-scope Query/BFF、同源 React/TypeScript 多路由 Web 垂直切片和离线 SigNoz 资产。`/apps/:appId/overview`、Issues 列表/详情、investigator 事件探索/详情、版本发布和数据质量均为独立可恢复路由；总览和 Issue 详情有 occurrence-time 趋势，Issue 详情有真实版本/场景聚合，设备型号和 Android 版本因标准字段缺失明确为 `UNKNOWN_COVERAGE`。性能、告警、设置目前只展示真实阻塞状态；完整告警深链、平台运维、性能域、SSO 与真实云端/SigNoz 验收仍按下表推进。
+- 当前已实现 fixed-scope Query/BFF、同源 React/TypeScript 多路由 Web 和离线 SigNoz 资产。总览、Issues/详情、事件探索/详情、版本、数据质量、性能、告警和设置均为独立可恢复路由。2026-10-13 新增 70 个性能数值契约、持久化告警 evaluator/outbox 和 admin 管理面；操作与权限见 [本地产品功能](11-本地产品功能.md)。设备/OS/session 标准字段、生产 SSO 与真实云端/SigNoz 验收仍待完成。
 
 ## 页面清单与导航层级
 
@@ -42,7 +44,9 @@
 - `/apps/:appId/issues` 与 `/apps/:appId/issues/:fingerprint`：稳定指纹列表、发生趋势、版本/场景分布和权限受控样本。
 - `/apps/:appId/explore` 与 `/apps/:appId/events/:eventId`：investigator-only L1 检索、事件详情和显式审计后的 L2 raw。
 - `/apps/:appId/releases` 与 `/apps/:appId/quality`：人工发布决策和数据质量证据。
-- `/apps/:appId/performance`、`alerts`、`settings`：能力边界页，不构成相应后端或云端能力已经完成的声明。
+- `/apps/:appId/performance`：13 个性能域的观测分布、版本差值、覆盖和趋势，缺失桶不连线；数据来自持久化 Inbox。
+- `/apps/:appId/alerts`：规则、触发/恢复实例、确认/静默、通知送达状态；admin 可写，其他角色只读。
+- `/apps/:appId/settings`：有效运行参数、管线与制品元数据；admin 另可管理应用名称、凭据、签名配置与审计。
 
 ## 桌面与移动/窄屏编排
 
@@ -55,7 +59,7 @@
 | 事故详情 | 共享数据、分开编排 | 元数据、栈、符号状态分段；L2 raw 单独受控页面 | raw/symbolized 并列，关联证据置于侧栏 | 权限、审计状态、provenance、request ID |
 | 数据可信度 | 共享编排、响应式尺寸 | 按链路阶段纵向展示，下一步动作紧邻原因 | coverage 矩阵与管线阶段并列 | 状态语义、来源、as-of、原因码 |
 | 平台运维 | 平台特定能力 | 只读告警摘要和 runbook 深链 | 完整时序、队列、实例和 dead-letter 操作 | 时间窗、告警状态、来源 |
-| 管理控制台 | 桌面专属 | 不提供高影响管理动作 | 独立管理布局，强确认与完整审计 | 身份、scope、审批/审计结果 |
+| 管理控制台 | 共享逻辑、响应式布局 | 当前本地版支持有权限的管理动作，密集历史表在容器内滚动 | 独立管理布局，明确 scope 与完整审计 | 身份、scope、权限/审计结果 |
 
 ## 数据可信契约
 
@@ -88,6 +92,8 @@
 产品 Web 源码与锁文件位于 `web/`，生产构建由 FastAPI 同源提供；Dashboard 和告警以版本化 SigNoz 资产保存在仓库，通过 API/导入脚本发布到 staging，再推广生产。禁止只在 UI 手工创建而不导出。每个页面/面板必须注明事件来源、过滤维度、单位、时间窗口和空数据含义。
 
 当前 API 面为：`GET /v1/query/release-health`、`/fingerprints`、`/issues/{fingerprint}`、`/data-quality`、investigator-only `/events` 与 `/events/{event_id}`、purpose-bound `POST /events/{event_id}/raw`，以及 `GET/POST /release-decisions`。Issue 详情是 L0 聚合，viewer 可读；凭据创建时固定 scope，窗口、扫描行数、page size 与 cursor filter 均有上限，游标使用专用 HMAC 防篡改。`investigator` 才能枚举事件、读取原始证据和记录人工 `continue/pause/rollback`；服务端不会自动执行发布动作。
+
+2026-10-13 扩展 API：`GET /v1/query/performance`、`/v1/alerts` 及规则/评估/静默/确认操作、`/v1/manage/settings`、`/keys`、`/configs`、`/audit`。admin 继承 investigator 读取与决策权限，管理写入必须有 admin 和 cookie CSRF；既有凭据不会自动提升权限。配置回滚以旧内容签名发布新 revision。告警统计上报观测，空数据不等于恢复；Webhook 仅由服务端配置目的地，浏览器只见渠道别名。
 
 每个查询还必须声明：
 
@@ -133,7 +139,7 @@
 | incident fingerprint count | distinct server fingerprint of exact event set | 未符号化可用受限 raw fingerprint，并标明质量 |
 | late ratio | 允许窗口外才到达或 occurrence/received 差超过阈值的事件占比 | `app_exit` 用 exitTimestamp；tombstone collection-time 单列 |
 
-当前客户端无统一 telemetry session，任何 “Crash-free sessions / ANR-free sessions” 卡片必须显示 `UNAVAILABLE: SESSION_ID_NOT_PROVIDED`，不能用 installation 或 event 数冒充。
+2026-10-14：V3 optional occurrence session 与明确 `core/session_start` 已打通；Crash-free/ANR-free 按窗口内明确开始的运行会话去重。旧数据缺身份或 start 不在窗口仍保留空值，SDK health、迟到、丢弃和最低样本门槛必须通过。Tombstone/app_exit 不并入现场失败分子。完整口径见 [ADR 0011](adr/0011-运行会话统计与多信号导出.md)。
 
 ### 页面结构
 

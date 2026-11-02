@@ -140,6 +140,15 @@ def _to_event(
             app_build=message.occurrence.app_build,
             variant=message.occurrence.variant,
             installation_id=message.occurrence.installation_id,
+            session_id=message.occurrence.session_id
+            if message.occurrence.HasField("session_id")
+            else None,
+            device_model=message.occurrence.device_model
+            if message.occurrence.HasField("device_model")
+            else None,
+            os_version=message.occurrence.os_version
+            if message.occurrence.HasField("os_version")
+            else None,
             native_frames=tuple(
                 NativeFrameIdentity(
                     abi=frame.abi,

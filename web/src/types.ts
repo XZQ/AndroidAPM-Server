@@ -22,7 +22,7 @@ export interface QueryWindow {
 export interface WebSession {
   requestId: string;
   scope: QueryScope;
-  role: "viewer" | "investigator";
+  role: "viewer" | "investigator" | "admin";
   expiresAtMs: number;
 }
 
@@ -40,6 +40,8 @@ export interface MetricResult {
 
 export interface ReleaseMetrics {
   javaCrashEvents: MetricResult;
+  nativeCrashEvents?: MetricResult;
+  nativeTombstoneEvents?: MetricResult;
   anrEvents: MetricResult;
   affectedInstallations: MetricResult;
   activeInstallations: MetricResult;
@@ -167,6 +169,9 @@ export interface DataQuality {
   inboxStatusCounts: Record<string, number>;
   releaseIdentity: MetricResult;
   installationIdentity: MetricResult;
+  sessionIdentity?: MetricResult;
+  deviceModelCoverage?: MetricResult;
+  osVersionCoverage?: MetricResult;
   sdkHealth: MetricResult;
   lateData: MetricResult;
 }
@@ -191,6 +196,9 @@ export interface EventSummary {
   releaseIdentityQuality: string;
   installationIdentityQuality: string;
   installationHmac: string | null;
+  sessionIdentityQuality?: string;
+  deviceModel?: string | null;
+  osVersion?: string | null;
   occurrenceTimestampMs: number;
   collectionTimestampMs: number | null;
   receivedAt: string;

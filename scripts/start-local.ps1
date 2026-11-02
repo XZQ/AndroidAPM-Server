@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [switch]$SkipSync,
-    [switch]$SkipSeed
+    [switch]$SkipSeed,
+    [switch]$PrepareOnly,
+    [string]$ClientRepo
 )
 
 Set-StrictMode -Version Latest
@@ -41,9 +43,15 @@ function Import-LocalEnvironment {
     }
 }
 
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+$uvCommand = Get-Command uv -ErrorAction SilentlyContinue
+if (-not $uvCommand) {
+    $bundledUv = Join-Path $localRoot "uv-bootstrap/bin/uv.exe"
+    if (Test-Path -LiteralPath $bundledUv) { $uvCommand = Get-Item -LiteralPath $bundledUv }
+}
+if (-not $uvCommand) {
     throw "uv is required. Install it before starting the local stack."
 }
+$uvPath = if ($uvCommand -is [System.IO.FileInfo]) { $uvCommand.FullName } else { $uvCommand.Source }
 if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
     throw "pnpm is required. Install it before starting the local stack."
 }
@@ -77,26 +85,56 @@ Import-LocalEnvironment -Path $envPath
 Push-Location $repoRoot
 try {
     if (-not $SkipSync) {
-        uv sync --all-groups --frozen
+        & $uvPath sync --all-groups --frozen
         if ($LASTEXITCODE -ne 0) { throw "uv sync failed" }
         pnpm --dir web install --frozen-lockfile
         if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
     }
     pnpm --dir web run build
     if ($LASTEXITCODE -ne 0) { throw "Web build failed" }
-    uv run alembic upgrade head
+    & $uvPath run alembic upgrade head
     if ($LASTEXITCODE -ne 0) { throw "Database migration failed" }
+    & $uvPath run python scripts/backfill_performance.py
+    if ($LASTEXITCODE -ne 0) { throw "Performance projection upgrade failed" }
+    if (-not [Environment]::GetEnvironmentVariable("APM_REMOTE_CONFIG_SIGNING_PRIVATE_KEY_B64")) {
+        $signingMaterial = & $uvPath run python -c "import json; from androidapm_server.remote_config import generate_signing_keypair; print(json.dumps(generate_signing_keypair()))"
+        if ($LASTEXITCODE -ne 0) { throw "Local signing key generation failed" }
+        $signingKeys = $signingMaterial | ConvertFrom-Json
+        Add-Content -LiteralPath $envPath -Value "APM_REMOTE_CONFIG_SIGNING_PRIVATE_KEY_B64=$($signingKeys[0])" -Encoding utf8
+        Import-LocalEnvironment -Path $envPath
+    }
     if (-not $SkipSeed) {
-        uv run python scripts/seed_local_preview.py
+        & $uvPath run python scripts/seed_local_preview.py
         if ($LASTEXITCODE -ne 0) { throw "Local fixture seeding failed" }
     }
+    if ($ClientRepo) {
+        $resolvedClient = (Resolve-Path -LiteralPath $ClientRepo).Path
+        if (-not (Test-Path -LiteralPath (Join-Path $resolvedClient "apm-sample-app/build.gradle.kts"))) {
+            throw "ClientRepo must be the AndroidAPM repository"
+        }
+        Copy-Item -LiteralPath (Join-Path $localRoot "apm-collector.properties") -Destination (Join-Path $resolvedClient "apm-collector.properties")
+        Write-Host "Prepared ignored Android debug configuration. Run adb reverse tcp:8080 tcp:8080 before launching the sample."
+    }
+    if ($PrepareOnly) { return }
 
     Write-Host ""
     Write-Host "AndroidAPM local server is starting at http://127.0.0.1:8080"
-    Write-Host "The synthetic fixture is for UI verification only; Android uploads use the printed ingest key."
+    Write-Host "Credentials are in .local/local-credentials.json; synthetic fixtures are for local verification."
     Write-Host "Press Ctrl+C to stop."
-    uv run androidapm-api
-    if ($LASTEXITCODE -ne 0) { throw "AndroidAPM API exited with an error" }
+    $pythonPath = Join-Path $repoRoot ".venv/Scripts/python.exe"
+    $workerProcesses = @()
+    try {
+        foreach ($worker in @("worker", "alerts")) {
+            $workerProcesses += Start-Process -FilePath $pythonPath -ArgumentList @("-m", "androidapm_server.$worker") -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $localRoot "$worker.out.log") -RedirectStandardError (Join-Path $localRoot "$worker.err.log")
+        }
+        & $uvPath run uvicorn androidapm_server.main:app --host 127.0.0.1 --port 8080
+        if ($LASTEXITCODE -ne 0) { throw "AndroidAPM API exited with an error" }
+    }
+    finally {
+        foreach ($process in $workerProcesses) {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id }
+        }
+    }
 }
 finally {
     Pop-Location

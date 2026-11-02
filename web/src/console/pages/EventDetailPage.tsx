@@ -1,3 +1,4 @@
+import { canInvestigate } from "../../permissions";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Braces, FileLock2, ShieldCheck } from "lucide-react";
 import { useOutletContext, useParams } from "react-router-dom";
@@ -25,7 +26,7 @@ export function EventDetailPage() {
   const beginRaw = useRequestGuard();
 
   const load = useCallback(async () => {
-    if (session.role !== "investigator") return;
+    if (!canInvestigate(session.role)) return;
     const current = begin();
     beginRaw();
     setMetadata(null); setRaw(null); setRawError(null); setRawLoading(false);
@@ -60,7 +61,7 @@ export function EventDetailPage() {
   }
 
   const appPath = `/apps/${encodeURIComponent(session.scope.appId)}`;
-  if (session.role !== "investigator") {
+  if (!canInvestigate(session.role)) {
     return (
       <div className="console-page">
         <PageHeader title="事件详情" description="单事件元数据和原始证据属于 L1/L2 数据" backTo={`${appPath}/issues`} />
@@ -74,6 +75,9 @@ export function EventDetailPage() {
 
   const item = metadata.event;
   const facts: Array<[string, string]> = [
+    ["会话身份", item.sessionIdentityQuality ?? "ABSENT"],
+    ["设备型号", item.deviceModel ?? "未提供"],
+    ["OS 版本", item.osVersion ?? "未提供"],
     ["事件 ID", item.eventId],
     ["发生时间", formatDateTime(item.occurrenceTimestampMs)],
     ["接收时间", formatDateTime(item.receivedAt)],

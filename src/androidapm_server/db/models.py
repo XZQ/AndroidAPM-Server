@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -199,6 +200,16 @@ class InboxEvent(Base):
     )
     installation_hmac: Mapped[str | None] = mapped_column(String(64))
     installation_hmac_key_version: Mapped[str | None] = mapped_column(String(32))
+    session_identity_quality: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default=IDENTITY_QUALITY_ABSENT,
+        server_default=IDENTITY_QUALITY_ABSENT,
+    )
+    session_hmac: Mapped[str | None] = mapped_column(String(64))
+    session_hmac_key_version: Mapped[str | None] = mapped_column(String(32))
+    device_model: Mapped[str | None] = mapped_column(String(MAX_IDENTIFIER_BYTES))
+    os_version: Mapped[str | None] = mapped_column(String(MAX_IDENTIFIER_BYTES))
     event_timestamp_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
     occurrence_timestamp_ms: Mapped[int] = mapped_column(BIGINT_PRIMARY_KEY, nullable=False)
     collection_timestamp_ms: Mapped[int | None] = mapped_column(BIGINT_PRIMARY_KEY)
@@ -229,6 +240,12 @@ class InboxEvent(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error_code: Mapped[str | None] = mapped_column(String(128))
     last_error_message: Mapped[str | None] = mapped_column(Text)
+    export_signal_states_json: Mapped[dict[str, str]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'"),
+    )
     symbolization_job: Mapped[SymbolizationJob | None] = relationship(
         back_populates="inbox_event", uselist=False, lazy="selectin"
     )
@@ -412,3 +429,89 @@ class ReleaseDecision(Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class AlertRule(Base):
+    """Scoped rule and serialized evaluation state, locked during each transition."""
+
+    __tablename__ = "alert_rules"
+    __table_args__ = (Index("ix_alert_rule_scope", "tenant_id", "app_id", "environment"),)
+
+    id: Mapped[int] = mapped_column(BIGINT_PRIMARY_KEY, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    app_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    environment: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    metric: Mapped[str] = mapped_column(String(256), nullable=False)
+    comparison: Mapped[str] = mapped_column(String(8), nullable=False)
+    threshold: Mapped[float] = mapped_column(nullable=False)
+    min_samples: Mapped[int] = mapped_column(Integer, nullable=False)
+    window_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    release_version: Mapped[str | None] = mapped_column(String(MAX_IDENTIFIER_BYTES))
+    channel: Mapped[str | None] = mapped_column(String(64))
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    silence_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="NO_DATA")
+    last_value: Mapped[float | None] = mapped_column()
+    last_sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    active_instance_id: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class AlertInstance(Base):
+    """One firing episode with an explicit acknowledgement and recovery time."""
+
+    __tablename__ = "alert_instances"
+    __table_args__ = (Index("ix_alert_instance_rule_time", "rule_id", "triggered_at"),)
+
+    id: Mapped[int] = mapped_column(BIGINT_PRIMARY_KEY, primary_key=True, autoincrement=True)
+    rule_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("alert_rules.id", ondelete="CASCADE"), nullable=False
+    )
+    triggered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_by: Mapped[str | None] = mapped_column(String(64))
+    trigger_value: Mapped[float] = mapped_column(nullable=False)
+    evidence_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class AlertDelivery(Base):
+    """Durable notification outbox with unique transitions and owner-fenced retries."""
+
+    __tablename__ = "alert_deliveries"
+    __table_args__ = (
+        UniqueConstraint("instance_id", "transition", "channel", name="uq_alert_delivery"),
+        Index("ix_alert_delivery_claim", "status", "next_attempt_at", "lease_expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BIGINT_PRIMARY_KEY, primary_key=True, autoincrement=True)
+    instance_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("alert_instances.id", ondelete="CASCADE"), nullable=False
+    )
+    transition: Mapped[str] = mapped_column(String(16), nullable=False)
+    channel: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    lease_owner: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(64))
+
+
+class AppSettings(Base):
+    """Application display settings; authorization scope remains credential-owned."""
+
+    __tablename__ = "app_settings"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "app_id", "environment", name="uq_app_settings_scope"),
+    )
+
+    id: Mapped[int] = mapped_column(BIGINT_PRIMARY_KEY, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    app_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    environment: Mapped[str] = mapped_column(String(128), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)

@@ -1,3 +1,4 @@
+import { canInvestigate } from "../../permissions";
 import { useCallback, useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
@@ -27,7 +28,7 @@ export function ReleasesPage() {
     setLoading(true); setError(null);
     try {
       const result = await getReleaseHealth(filters);
-      const history = session.role === "investigator" ? (await getReleaseDecisions(filters.newRelease)).items : [];
+      const history = canInvestigate(session.role) ? (await getReleaseDecisions(filters.newRelease)).items : [];
       if (!current()) return;
       setHealth(result); setDecisions(history);
     } catch (caught) { if (current()) setError(handleFailure(caught, "发布证据查询失败")); }
@@ -75,6 +76,6 @@ export function ReleasesPage() {
   if (health === null) return null;
   return <div className="console-page"><PageHeader eyebrow="Release Health / 人工门禁" title="版本发布" description={`${filters.newRelease} 对比 ${filters.baselineRelease} · ${formatDateTime(filters.fromMs)} — ${formatDateTime(filters.toMs)}`} actions={<StateBadge state={health.newRelease.state} />} />
     <section className="release-status-band"><div><span>Java Crash</span><strong>{health.newRelease.metrics.javaCrashEvents.value ?? "—"}</strong></div><div><span>ANR</span><strong>{health.newRelease.metrics.anrEvents.value ?? "—"}</strong></div><div><span>影响安装</span><strong>{health.newRelease.metrics.affectedInstallations.value ?? "—"}</strong></div><div><span>自动发布动作</span><strong>未接入</strong></div></section>
-    {session.role === "investigator" ? <DecisionPanel scope={session.scope} health={health} decisions={decisions} submitting={submitting} error={decisionError} onSubmit={submit} /> : <EmptyPanel title="查看者只读" message="你可以查看版本证据，但记录人工继续、暂停或回滚建议需要 investigator 权限。" />}
+    {canInvestigate(session.role) ? <DecisionPanel scope={session.scope} health={health} decisions={decisions} submitting={submitting} error={decisionError} onSubmit={submit} /> : <EmptyPanel title="查看者只读" message="你可以查看版本证据，但记录人工继续、暂停或回滚建议需要 investigator 权限。" />}
   </div>;
 }

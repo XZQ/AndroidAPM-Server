@@ -1,3 +1,4 @@
+import { canInvestigate } from "../../permissions";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowRight, Layers3 } from "lucide-react";
 import { Link, useOutletContext, useParams } from "react-router-dom";
@@ -29,7 +30,7 @@ export function IssueDetailPage() {
     try {
       const issue = await getIssueDetail(fingerprint, filters);
       if (!current()) return;
-      const page = session.role === "investigator"
+      const page = canInvestigate(session.role)
         ? await getEvents(filters, issue.fingerprint)
         : null;
       if (!current()) return;
@@ -96,7 +97,7 @@ export function IssueDetailPage() {
 
       <section className="console-panel issue-events-panel">
         <SectionHeading title={`样本事件 · ${filters.newRelease}`} meta={<span>最多显示当前页 25 条</span>} />
-        {session.role !== "investigator" ? (
+        {!canInvestigate(session.role) ? (
           <EmptyPanel title="需要调查员权限" message="viewer 可以查看 Issue 聚合，但不能枚举安装级事件。" />
         ) : events === null || events.items.length === 0 ? (
           <EmptyPanel title="当前版本没有可见样本" message="Issue 聚合可能来自时间窗内的其他版本；调整版本比较后重试。" />

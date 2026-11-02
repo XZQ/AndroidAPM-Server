@@ -308,3 +308,33 @@ body,
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* Product pages constrain long contracts and evidence to their own scroll surfaces. */
+.product-form, .product-form fieldset { display: flex; flex-wrap: wrap; align-items: end; gap: .8rem; min-width: 0; }
+.product-form { margin: 1rem 0; }
+.product-form fieldset { border: 0; padding: 0; margin: 0; width: 100%; }
+.product-form label, .console-panel > label { display: grid; gap: .35rem; min-width: 0; max-width: 100%; font-size: .8rem; }
+.product-form input, .product-form select, .product-form textarea, .console-panel > label select { max-width: 100%; min-width: 0; padding: .55rem; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: var(--bg); }
+.product-form select { width: min(28rem, 100%); }
+.product-form .product-wide { flex: 1 0 100%; }
+.product-form textarea { width: 100%; font-family: monospace; }
+.product-form button, .product-table button, .product-secret button, .console-page-actions > button { border: 1px solid var(--line-bright); color: var(--text); background: var(--panel-strong); border-radius: 5px; padding: .5rem .7rem; }
+.product-table { max-width: 100%; min-width: 0; overflow-x: auto; }
+.product-table table { border-collapse: collapse; width: 100%; text-align: left; font-size: .78rem; }
+.product-table th, .product-table td { padding: .75rem; border-bottom: 1px solid var(--line); vertical-align: top; min-width: 7rem; }
+.product-table th { font-weight: 600; }
+.product-table small { display: block; margin-top: .25rem; color: var(--muted); overflow-wrap: anywhere; }
+.product-table th:first-child { max-width: 22rem; overflow-wrap: anywhere; }
+.product-table pre, .product-secret pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 30rem; }
+.product-actions { display: flex; gap: .4rem; flex-wrap: wrap; min-width: 13rem; }
+.product-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: .65rem; }
+.product-facts > div { display: flex; justify-content: space-between; gap: .5rem; font-size: .8rem; }
+.product-facts dt, .product-code { overflow-wrap: anywhere; }
+.product-facts dd { margin: 0; }
+.product-secret { padding: 1rem; border: 1px solid var(--accent); border-radius: 5px; }
+.span-track { width: 16rem; background: var(--panel-soft); min-height: 1rem; }
+.span-track span { display: block; min-width: 2px; height: 1rem; background: var(--accent); }
+@media (max-width: 600px) { .product-form > label, .product-form fieldset > label { width: 100%; } }
+
+.product-table a { color: var(--accent); }
+.product-table tbody th { text-transform: none; letter-spacing: normal; color: var(--text); }

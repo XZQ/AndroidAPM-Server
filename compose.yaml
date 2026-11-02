@@ -4,6 +4,10 @@ x-app-environment: &app-environment
   APM_ENVIRONMENT: local
   APM_DATABASE_URL: postgresql+asyncpg://androidapm:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/androidapm
   APM_OTLP_LOGS_ENDPOINT: ${APM_OTLP_LOGS_ENDPOINT:-http://host.docker.internal:4318/v1/logs}
+  APM_OTLP_METRICS_ENABLED: ${APM_OTLP_METRICS_ENABLED:-false}
+  APM_OTLP_METRICS_ENDPOINT: ${APM_OTLP_METRICS_ENDPOINT:-http://host.docker.internal:4318/v1/metrics}
+  APM_OTLP_TRACES_ENABLED: ${APM_OTLP_TRACES_ENABLED:-false}
+  APM_OTLP_TRACES_ENDPOINT: ${APM_OTLP_TRACES_ENDPOINT:-http://host.docker.internal:4318/v1/traces}
   APM_OTLP_HEADERS_JSON: '${APM_OTLP_HEADERS_JSON:-{}}'
   APM_INSTALLATION_HMAC_KEYS_JSON: '${APM_INSTALLATION_HMAC_KEYS_JSON:-{}}'
   APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION: ${APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION:-v1}
@@ -34,6 +38,11 @@ x-app-environment: &app-environment
   APM_WEB_SESSION_HMAC_KEY_B64: ${APM_WEB_SESSION_HMAC_KEY_B64:-}
   APM_WEB_SESSION_TTL_SECONDS: ${APM_WEB_SESSION_TTL_SECONDS:-3600}
   APM_WEB_SESSION_COOKIE_SECURE: ${APM_WEB_SESSION_COOKIE_SECURE:-false}
+  APM_REMOTE_CONFIG_SIGNING_PRIVATE_KEY_B64: ${APM_REMOTE_CONFIG_SIGNING_PRIVATE_KEY_B64:-}
+  APM_REMOTE_CONFIG_PUBLIC_KEY_ID: ${APM_REMOTE_CONFIG_PUBLIC_KEY_ID:-local-development-key}
+  APM_ALERT_POLL_SECONDS: ${APM_ALERT_POLL_SECONDS:-30}
+  APM_NOTIFICATION_CHANNELS_JSON: '${APM_NOTIFICATION_CHANNELS_JSON:-{}}'
+  APM_NOTIFICATION_MAX_ATTEMPTS: ${APM_NOTIFICATION_MAX_ATTEMPTS:-5}
 
 services:
   postgres:
@@ -113,6 +122,22 @@ services:
       - ALL
     volumes:
       - artifact-data:/var/lib/androidapm/artifacts
+    restart: unless-stopped
+
+  alerts:
+    build: .
+    command: ["androidapm-alerts"]
+    environment: *app-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
 
 volumes:

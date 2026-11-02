@@ -1,3 +1,4 @@
+import { canInvestigate } from "../permissions";
 import { useState } from "react";
 import {
   Activity,
@@ -34,6 +35,7 @@ export function ConsoleLayout({ value }: { value: ConsoleContextValue }) {
     { to: `${appPath}/issues`, label: "Issues", icon: Bug },
     { to: `${appPath}/explore`, label: "事件探索", icon: Search, investigator: true },
     { to: `${appPath}/performance`, label: "性能分析", icon: Gauge },
+    { to: `${appPath}/traces`, label: "Trace", icon: Activity, investigator: true },
     { to: `${appPath}/releases`, label: "版本发布", icon: Activity },
     { to: `${appPath}/quality`, label: "数据质量", icon: ShieldCheck },
     { to: `${appPath}/alerts`, label: "告警", icon: BellRing },
@@ -55,9 +57,9 @@ export function ConsoleLayout({ value }: { value: ConsoleContextValue }) {
           <button className="mobile-close" type="button" onClick={() => setMenuOpen(false)} aria-label="关闭导航"><X size={18} /></button>
         </div>
         <nav aria-label="主导航">
-          {nav.filter((item) => item.investigator !== true || session.role === "investigator").map((item) => {
+          {nav.filter((item) => item.investigator !== true || canInvestigate(session.role)).map((item) => {
             const Icon = item.icon;
-            const unavailable = item.investigator === true && session.role !== "investigator";
+            const unavailable = item.investigator === true && !canInvestigate(session.role);
             return (
               <NavLink
                 key={item.to}
@@ -101,7 +103,7 @@ export function ConsoleLayout({ value }: { value: ConsoleContextValue }) {
               </select>
             </label>
             <span className="session-chip" title={`会话到期：${formatDateTime(session.expiresAtMs)}`}>
-              {session.role === "investigator" ? "调查员" : "查看者"}
+              {session.role === "admin" ? "管理员" : canInvestigate(session.role) ? "调查员" : "查看者"}
             </span>
             <button className="console-icon-button" type="button" onClick={() => setDark((current) => !current)} aria-label="切换明暗主题">
               {dark ? <Sun size={17} /> : <Moon size={17} />}

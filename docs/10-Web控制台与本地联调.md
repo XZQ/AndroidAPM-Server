@@ -1,6 +1,10 @@
 # Web 控制台、本地联调与上云交接
 
-> 实现基线：2026-09-04。本文描述当前仓库已经落地的同源 Web 控制台和可执行本地流程；Docker、PostgreSQL、TLS、SigNoz 与通知的云端结论必须在购买服务器后现场验证。
+2026-11-02 当前 Web：性能、告警、设置、Trace 深链均使用真实 API；admin 包含 investigator 入口。会话率由服务端返回状态控制，不硬编码不可计算，也不补缺失。当前 SDK 尚未上报标准 session/device/OS/session_start/span v2，所以其真实数据通常不可计算；历史浏览器/SDK 验收记录不能替代本次证据。
+
+2026-10-14 本地统计扩展：总览/发布新增 Native、Tombstone 与标准运行会话率；Issue 可看设备/OS 及缺失覆盖；性能补齐 SDK 已采集事件；`/apps/:appId/traces` 与 `/traces/:traceId` 提供 investigator/admin 手动 Trace 列表、真实时间线与层级。旧数据保持缺失原因，所有深链使用同源 session/固定 scope。见 [统计契约](12-统计契约与口径.md) 与 [ADR 0011](adr/0011-运行会话统计与多信号导出.md)。
+
+> 实现基线：2026-10-13。性能、告警、设置和 Sample 本地接通详见 [本地产品功能](11-本地产品功能.md)。PostgreSQL/TLS/SigNoz 与真实通知仍需环境准备后现场验证，下文标明日期的浏览器记录属于历史证据。
 
 ## 当前结论
 
@@ -31,9 +35,9 @@ desktop browser
 - `ZERO/NO_DATA/UNAVAILABLE/UNKNOWN_COVERAGE/DEGRADED/LATE/ERROR`、部分失败、窄屏和深浅主题。
 - 独立总览、Issues、Issue 详情、事件探索、事件详情、版本和数据质量路由；刷新或复制深链后可以恢复页面。
 - Issue 发生趋势与版本/场景分布来自 durable inbox；设备/Android 版本缺标准协议字段时显示 `UNKNOWN_COVERAGE`。
-- 性能、告警和设置只有能力状态页，不显示模拟数字，也不代表对应服务已经接入。
+- 性能为精确契约的分位数/覆盖/趋势/版本比较；告警有持久化规则、实例和通知 outbox；设置有 admin 管理 API 与审计。缺观测或渠道时明确显示无数据/未配置。
 
-尚不属于当前网页完成项：SSO/账号密码体系、tenant 管理、密钥管理、制品管理、远程配置管理、完整运维面板、所有 SDK 性能域、通知渠道和自动发布操作。
+尚不属于当前本地网页完成项：SSO/账号密码体系、跨 tenant 管理、标准 session/device/OS/Trace 契约、真实云部署和自动发布操作。制品上传使用 CI API，网页提供元数据和任务状态。
 
 ## 同源认证边界
 
@@ -75,7 +79,7 @@ powershell -ExecutionPolicy Bypass -File scripts\start-local.ps1
 2. 按 lockfile 同步 Python/前端依赖并构建 `web/dist`。
 3. 对 `.local/androidapm-preview.db` 执行 Alembic migration。
 4. 写入明确标记为 synthetic 的 1.0.0/2.0.0 Crash/ANR 可信场景，包含 V3 occurrence 与一个被排除的 V2 compatibility fact。
-5. 创建一天有效的 investigator Query Key 和本地 Android ingest key，只输出到当前终端。
+5. 创建一天有效的 admin Query Key 和本地 Android ingest key，写入忽略文件 `.local/local-credentials.json`；客户端属性写入 `.local/apm-collector.properties`，不打印 secret。
 6. 在 `http://127.0.0.1:8080` 启动同源 API 与网页。
 
 synthetic fixture 只验证页面状态、查询口径和权限路径；页面不把它标为生产数据。要跳过重复依赖同步可使用 `-SkipSync`，要仅使用真实 Android 上传可使用 `-SkipSeed`。

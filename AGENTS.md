@@ -18,6 +18,7 @@ This is the repository-local handoff entry for AndroidAPM-Server. Source code, m
 10. `docs/09-实施路线图.md`
 11. `docs/10-Web控制台与本地联调.md`
 12. `docs/云端待建设清单.md`
+    Current local operations: `docs/11-本地产品功能.md` and `docs/adr/0010-本地性能告警与管理面.md`.
 13. `docs/adr/0006-发生时身份与installation假名化.md`
 14. `docs/adr/0007-同源Web控制台与短时会话.md`
 15. `docs/adr/0008-保留策略与容量准入.md`
@@ -26,7 +27,7 @@ This is the repository-local handoff entry for AndroidAPM-Server. Source code, m
 ## Current verified baseline
 
 - Baseline date: `2026-09-12`
-- Branch: `codex/server-foundation`
+- Branch: `main` (sole local/remote branch since 2026-10-13; complete implementation history retained)
 - Runtime: Python `3.11.15`, FastAPI `0.139.0`, SQLAlchemy `2.0.51`
 - Persistence: PostgreSQL production model; SQLite is used only for fast compatibility tests
 - Telemetry target: OTLP/HTTP Logs to SigNoz `v0.133.0`, installation method pinned to Foundry `v0.2.13`; deployment remains unverified
@@ -39,6 +40,12 @@ This is the repository-local handoff entry for AndroidAPM-Server. Source code, m
 - Operations: bounded asynchronous key verification, private worker metrics, safe exception diagnostics, terminal raw retention with replay metadata and explicit evidence expiry/coverage states, and transactional ingest capacity backpressure
 - Local verification: dependency sync, Ruff, mypy over 55 source files, 204 backend tests with the opt-in local NDK 27 / LLVM 18 two-ELF regression, 12 required documents, all four frontend gates with 18 Vitest tests, seven-revision SQLite migration checks; routed-console desktop/mobile browser smoke remains historical 2026-09-04 evidence
 - Verification: 2026-09-12 real Android `HttpApmUploader` V2/V3 loopback E2E passed against seven-revision test-only SQLite with Gzip/exact ACK/typed and occurrence persistence/HMAC/replay; six PostgreSQL integration tests were skipped without a configured connection. Do not infer Docker/PostgreSQL/TLS/SigNoz deployment from local evidence
+
+2026-10-13 本地产品扩展：八版 migration 至 `20261013_0008`，Normalization v3 和 70 个性能数值契约；性能/告警/设置为真实 API 页面。告警独立持久化 evaluator/outbox，管理权限、CSRF、凭据/配置生命周期和 scope 审计见 ADR 0010、`docs/11-本地产品功能.md`。上文数字属于历史基线，当前验证以 PROJECT_HANDOFF 最新条目为准。
+
+2026-10-14 本地统计：九版 migration 至 `20261014_0009`，Normalization v4、243 numeric fields / 66 event contracts / 29 fixed categories、Native/tombstone 独立统计、标准匿名 runtime sessions 与 device/OS 分布、手动 Trace 与 opt-in OTLP Metrics/Traces。SDK durable V5 读取 V1–V4。阅读 `docs/12-统计契约与口径.md` 与 `docs/adr/0011-运行会话统计与多信号导出.md`；逐信号 frozen export plan 和 lease fencing 必须保留。
+
+2026-11-02 修正：上文 SDK durable V5/session_start/span v2 的完成描述与当前客户端源码不符；当前 SDK 仍为 V4，服务端字段 7–9 是已审查的向后兼容 optional 扩展。Web 产品页本轮已实际接入 API；当前验证以 PROJECT_HANDOFF 2026-11-02 条目为准。
 
 ## Non-negotiable invariants
 
@@ -56,11 +63,11 @@ This is the repository-local handoff entry for AndroidAPM-Server. Source code, m
 - Product facts use exact client `module/name/field` contracts. `module=crash` is not equivalent to a crash because it also contains `app_exit`.
 - The default periodic SDK-health runtime identity is currently `core/sdk_health`; do not build production assets from helper/test-only `sdk_self_monitor/sdk_health_report` without a versioned client change.
 - Missing, unavailable, not-applicable, invalid, unknown-coverage, late, and real zero are distinct states. Never fill a missing metric or denominator with zero.
-- Crash-free/ANR-free session metrics remain unavailable until the client ships a standard occurrence-bound telemetry session identity.
+- Crash-free/ANR-free session metrics require standard occurrence-bound runtime session identity, valid session_start inside the query window, complete identity/SDK-health coverage and quality gates. Never infer sessions from installation/event counts; historical app_exit/tombstone evidence does not count as a live session failure.
 - URL, SQL, path, stack, exception message, JavaScript, and arbitrary context/extras are high-cardinality or sensitive; raw retention does not authorize default OTLP attribute indexing.
 - V2 resource/build values remain upload-batch declarations and must stay `BATCH_DECLARED`; V3 occurrence values are frozen into each durable Android event and stored as `OCCURRENCE_BOUND`.
-- Known V2/V3 installation plaintext must never enter `payload_json`, logs, OTLP, query responses, or audits. Persistence keeps only the tenant-scoped HMAC and its key version; replay comparison uses the row's original key version.
-- Query credentials own immutable tenant/app/environment scope. Request parameters and opaque cursors never grant or widen scope; `viewer` is L0-only and only `investigator` may read L1/L2 or record release decisions.
+- Known V2/V3 installation and optional V3 session plaintext must never enter payloads, logs, OTLP, queries or audits. Separate HMAC domains retain tenant scope and original key versions for replay; absent new optional keys never change legacy V3 payload hashes.
+- Query credentials own immutable tenant/app/environment scope. Request parameters/cursors never widen scope; viewer is L0-only, investigator/admin may read L1/L2 and record decisions, and only independently provisioned admin may manage keys/configs/alerts. Existing keys never acquire admin rights automatically.
 - Browsers never persist raw `apmq1` credentials. Production Web sessions require HTTPS Secure cookies, a dedicated signing key, database revocation checks, and CSRF on ambient-cookie writes.
 
 ## Engineering rules

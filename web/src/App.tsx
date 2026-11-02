@@ -5,7 +5,10 @@ import { ApiFailure, logout, restoreSession } from "./api";
 import { LoginPage } from "./components/LoginPage";
 import { ConsoleLayout } from "./console/ConsoleLayout";
 import { defaultFilters, type ConsoleContextValue } from "./console/context";
-import { CapabilityPage } from "./console/pages/CapabilityPage";
+import { AlertsPage } from "./console/pages/AlertsPage";
+import { PerformancePage } from "./console/pages/PerformancePage";
+import { SettingsPage } from "./console/pages/SettingsPage";
+import { TracesPage } from "./console/pages/TracesPage";
 import { EventDetailPage } from "./console/pages/EventDetailPage";
 import { ExplorePage } from "./console/pages/ExplorePage";
 import { IssueDetailPage } from "./console/pages/IssueDetailPage";
@@ -96,11 +99,13 @@ export default function App() {
           <Route path="issues/:fingerprint" element={<IssueDetailPage />} />
           <Route path="explore" element={<ExplorePage />} />
           <Route path="events/:eventId" element={<EventDetailPage />} />
-          <Route path="performance" element={<CapabilityPage kind="performance" />} />
+          <Route path="performance" element={<PerformancePage />} />
+          <Route path="traces" element={<TracesPage />} />
+          <Route path="traces/:traceId" element={<TracesPage />} />
           <Route path="releases" element={<ReleasesPage />} />
           <Route path="quality" element={<QualityPage />} />
-          <Route path="alerts" element={<CapabilityPage kind="alerts" />} />
-          <Route path="settings" element={<CapabilityPage kind="settings" />} />
+          <Route path="alerts" element={<AlertsPage />} />
+          <Route path="settings" element={<SettingsPage />} />
           <Route index element={<Navigate to="overview" replace />} />
           <Route path="*" element={<Navigate to="overview" replace />} />
         </Route>

@@ -7,12 +7,14 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from typing import TypeVar
 
 from androidapm_server.errors import ApiError
 
 AUTH_HASH_WORKERS = 2
 AUTH_ATTEMPTS_PER_SECOND = 20
 AUTH_ATTEMPT_BURST = 40
+HashResult = TypeVar("HashResult")
 
 
 def _busy() -> ApiError:
@@ -59,10 +61,14 @@ class BoundedHashVerifier:
 
     async def verify(self, function: Callable[[str, str], bool], encoded: str, secret: str) -> bool:
         """Keep a slot until its actual thread exits, including cancelled HTTP requests."""
+        return await self.run(lambda: function(encoded, secret))
+
+    async def run(self, function: Callable[[], HashResult]) -> HashResult:
+        """Share the fixed memory budget between credential verification and creation."""
         if not self._slots.acquire(blocking=False):
             raise _busy()
         try:
-            future = self._pool.submit(function, encoded, secret)
+            future = self._pool.submit(function)
         except BaseException:
             self._slots.release()
             raise

@@ -42,6 +42,7 @@ def test_web_assets_are_built_once_and_production_tls_proxy_is_explicit() -> Non
     assert "AS web-builder" in dockerfile
     assert "pnpm install --frozen-lockfile" in dockerfile
     assert "COPY --from=web-builder /web/dist ./web/dist" in dockerfile
+    assert "COPY web/public ./public" in dockerfile
     assert 'href="/favicon.svg"' in web_index
     assert favicon.startswith("<svg ")
     assert compose["services"]["gateway"]["ports"] == [

@@ -150,6 +150,10 @@ def _log_record(event: InboxEvent) -> LogRecord:
     payload = event.payload_json
     module = str(payload["module"])
     name = str(payload["name"])
+    if module == "trace":
+        # Manual operation names are free host text and may embed secrets or IDs.
+        # Keep the original in scoped L1 evidence, never in indexed OTLP fields/body.
+        name = "manual_span"
     severity = str(payload["severity"])
     attributes: dict[str, Any] = {
         "android.apm.event_id": event.event_id,

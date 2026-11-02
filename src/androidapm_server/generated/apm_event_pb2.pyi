@@ -91,20 +91,26 @@ class ApmResource(_message.Message):
     def __init__(self, service_name: _Optional[str] = ..., service_version: _Optional[str] = ..., deployment_environment: _Optional[str] = ..., installation_id: _Optional[str] = ...) -> None: ...
 
 class ApmOccurrenceContext(_message.Message):
-    __slots__ = ("service_version", "version_code", "app_build", "variant", "installation_id", "native_frames")
+    __slots__ = ("service_version", "version_code", "app_build", "variant", "installation_id", "native_frames", "session_id", "device_model", "os_version")
     SERVICE_VERSION_FIELD_NUMBER: _ClassVar[int]
     VERSION_CODE_FIELD_NUMBER: _ClassVar[int]
     APP_BUILD_FIELD_NUMBER: _ClassVar[int]
     VARIANT_FIELD_NUMBER: _ClassVar[int]
     INSTALLATION_ID_FIELD_NUMBER: _ClassVar[int]
     NATIVE_FRAMES_FIELD_NUMBER: _ClassVar[int]
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    DEVICE_MODEL_FIELD_NUMBER: _ClassVar[int]
+    OS_VERSION_FIELD_NUMBER: _ClassVar[int]
     service_version: str
     version_code: str
     app_build: str
     variant: str
     installation_id: str
     native_frames: _containers.RepeatedCompositeFieldContainer[ApmNativeFrameIdentity]
-    def __init__(self, service_version: _Optional[str] = ..., version_code: _Optional[str] = ..., app_build: _Optional[str] = ..., variant: _Optional[str] = ..., installation_id: _Optional[str] = ..., native_frames: _Optional[_Iterable[_Union[ApmNativeFrameIdentity, _Mapping]]] = ...) -> None: ...
+    session_id: str
+    device_model: str
+    os_version: str
+    def __init__(self, service_version: _Optional[str] = ..., version_code: _Optional[str] = ..., app_build: _Optional[str] = ..., variant: _Optional[str] = ..., installation_id: _Optional[str] = ..., native_frames: _Optional[_Iterable[_Union[ApmNativeFrameIdentity, _Mapping]]] = ..., session_id: _Optional[str] = ..., device_model: _Optional[str] = ..., os_version: _Optional[str] = ...) -> None: ...
 
 class ApmNativeFrameIdentity(_message.Message):
     __slots__ = ("abi", "module_build_id", "module_name", "module_relative_pc", "load_bias")

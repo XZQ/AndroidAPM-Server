@@ -86,6 +86,71 @@ def metadata(tenant_id: str = "tenant-a", *, app_build: str | None = None) -> In
 
 
 @pytest.mark.asyncio
+async def test_session_identity_is_tenant_scoped_redacted_and_replay_safe(
+    session: AsyncSession,
+) -> None:
+    plaintext = "5b3bd3a7-08ea-4f07-9a47-e04ecaeef009"
+    original = occurrence_event("session-event")
+    assert original.occurrence is not None
+    original = original.model_copy(
+        update={
+            "occurrence": original.occurrence.model_copy(
+                update={
+                    "session_id": plaintext,
+                    "device_model": "Example/Model",
+                    "os_version": "14/API 34",
+                }
+            ),
+            "fields": {"nested": {"secret": plaintext}, "safe": 1},
+        }
+    )
+    await insert_batch(session, metadata(), [original], KEYS_V1)
+    await insert_batch(session, metadata("tenant-b"), [original], KEYS_V1)
+    await session.commit()
+    replay = await insert_batch(session, metadata(), [original], KEYS_V2)
+    assert replay.duplicates == 1
+    rows = (await session.scalars(select(InboxEvent).order_by(InboxEvent.tenant_id))).all()
+    assert rows[0].session_hmac != rows[1].session_hmac
+    assert rows[0].session_identity_quality == "OCCURRENCE_BOUND"
+    assert rows[0].session_hmac_key_version == "v1"
+    assert rows[0].device_model == "Example/Model" and rows[0].os_version == "14/API 34"
+    assert plaintext not in json.dumps([row.payload_json for row in rows])
+    assert plaintext not in json.dumps([row.normalized_json for row in rows])
+    assert KEYS_V1.digest("tenant-a", plaintext) != rows[0].session_hmac
+    changed = original.model_copy(
+        update={
+            "occurrence": original.occurrence.model_copy(
+                update={"session_id": "b67f341b-d22d-4978-8a40-a036ae61cb16"}
+            )
+        }
+    )
+    with pytest.raises(ApiError, match="conflict"):
+        await insert_batch(session, metadata(), [changed], KEYS_V2)
+
+
+@pytest.mark.asyncio
+async def test_optional_context_absence_preserves_pre_extension_payload_hash(
+    session: AsyncSession,
+) -> None:
+    import hashlib
+
+    original = occurrence_event("legacy-v3")
+    assert original.occurrence is not None
+    legacy = original.model_dump(mode="json")
+    for key in ("session_id", "device_model", "os_version", "installation_id"):
+        legacy["occurrence"].pop(key, None)
+    expected = hashlib.sha256(
+        json.dumps(legacy, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    await insert_batch(session, metadata(), [original], KEYS_V1)
+    await session.commit()
+    row = await session.scalar(select(InboxEvent).where(InboxEvent.event_id == "legacy-v3"))
+    assert row is not None and row.payload_sha256 == expected
+    assert row.session_identity_quality == "ABSENT" and row.session_hmac is None
+    assert (await insert_batch(session, metadata(), [original], KEYS_V2)).duplicates == 1
+
+
+@pytest.mark.asyncio
 async def test_replay_is_acknowledged_without_second_row(session: AsyncSession) -> None:
     first = await insert_batch(session, metadata(), [event("one"), event("two")])
     await session.commit()

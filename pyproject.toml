@@ -40,6 +40,7 @@ dev = [
 androidapm-api = "androidapm_server.main:run"
 androidapm-worker = "androidapm_server.worker:run"
 androidapm-symbolizer = "androidapm_server.symbolizer_worker:run"
+androidapm-alerts = "androidapm_server.alerts:run"
 androidapm-admin = "androidapm_server.admin:run"
 
 [build-system]
