@@ -1,118 +1,75 @@
 # AndroidAPM-Server
 
-2026-11-02：本地性能、告警、设置和手动 Trace 页面已接入真实 API，admin 继承调查权限。服务端提供 Normalization v4、243 个数值契约、66 种事件、29 个固定类别及 opt-in OTLP Metrics/Traces；部署前升级九版 migration。V3 session/device/OS 是向后兼容的服务端可选扩展，当前 Android SDK 尚未上报这些字段、标准 session_start 或 span v2 起止；SDK durable codec 仍为 V4。会话率和设备覆盖在缺失时保持不可用，旧 Span 不伪造时间线。操作见 [本地功能](docs/11-本地产品功能.md)、[统计契约](docs/12-统计契约与口径.md)、[ADR 0011](docs/adr/0011-运行会话统计与多信号导出.md)，当前验证见 [交接](docs/PROJECT_HANDOFF.md)。云端 HTTPS 服务已上线运行，运行事实与未完成的现场验收见 [云端运行环境](docs/13-云端运行环境.md)：SigNoz 真实接收、通知渠道、备份恢复、SSO/KMS、真机采集与容量/soak 仍未通过验收，"公网可达"不等于"生产验收通过"。
+[AndroidAPM](https://github.com/XZQ/AndroidAPM) SDK 的服务端：把「至少一次」投递的 Android 遥测写入 PostgreSQL durable inbox，按 `(tenant_id, event_id)` 幂等去重并在提交后返回精确整批 ACK，再把允许列表内的 OTLP 信号导出到外部 SigNoz；同时提供固定 scope 的查询/BFF、同源 Web 控制台、崩溃符号化与签名远程配置。
 
-Retention preserves evidence availability without retaining expired scene strings. Removed registered fields become `EXPIRED`; missing/invalid fields and retained numeric values keep their original states. Issue scene distributions expose weighted available/missing/expired/historical-unknown counts and mark partial evidence `DEGRADED`. Historical pruned scenes without presence metadata are never reported as client omissions.
+本仓库**不 fork SigNoz**，也不负责 Android 端采集。SigNoz / ClickHouse 是外部依赖，版本锁定为 `v0.133.0` / Foundry `v0.2.13`（见 [deploy/signoz/VERSIONS.env](deploy/signoz/VERSIONS.env)）。唯一分支为 `main`。
 
-Symbol tools stream stdout/stderr concurrently with stdin, enforcing a separate 1 MiB limit per output stream before retaining additional bytes. Overflow terminates and reaps the direct child immediately; timeout/cancellation cleanup drains remaining pipe bytes without accumulating them.
+## 状态速览
 
-Native symbolization verifies every typed occurrence frame against its raw module-relative PC, module name and optional inline build ID, then uses the exact scoped ELF per ABI/build ID. Missing modules wait without consuming tool attempts; all-unknown output fails, while function-only or mixed results are `partially_symbolized`. Per-frame resolution and artifact provenance are retained in L2 evidence. A local two-module NDK LLVM regression is available with `APM_TEST_NDK_BIN`; real-device crash capture and production tool images still require verification.
+| 项 | 当前状态（2026-11-07） |
+| --- | --- |
+| 运行时 | Python 3.11、FastAPI、SQLAlchemy 2；依赖由 `uv` 锁定，Web 由 `pnpm` 锁定 |
+| 持久化 | PostgreSQL 是生产 inbox；SQLite 仅用于兼容性测试与本地预览 |
+| 数据库迁移 | Alembic 九版，head `20261014_0009`，发布前先升级 |
+| 统计口径 | Normalization v4：243 数值字段 / 66 精确事件 / 29 固定类别 |
+| SDK 契约 | 客户端仍为 durable **V4**；服务端字段 7–9 是已审查的向后兼容 optional 扩展，标准 `session_start` / device / OS / span v2 尚未由客户端上报 |
+| 云端部署 | 首尔轻量应用服务器上的 HTTPS 服务已上线，运行事实见 [云端运行环境](docs/13-云端运行环境.md) |
+| 验收边界 | SigNoz 真实接收、通知渠道、备份/PITR、SSO/KMS、真机采集与容量/soak **仍未通过** |
 
-Java mapping validation accepts dotted JVM class names, including kept package/class names, inner classes, Unicode and generated lambda names. Empty segments, descriptor/path punctuation and NUL-containing input remain invalid.
+> **公网可达不等于生产验收通过。** 最新验证证据以 [PROJECT_HANDOFF.md](docs/PROJECT_HANDOFF.md) 的最新日期条目为准；文中历史数字只代表当时基线。云端配置尚未回收纳管，仓库改动也**不会自动同步到线上**。
 
-Migration `20260912_0007` preserves raw fingerprint aliases and applies completed Java symbol fingerprints to Issue grouping. New completions update the Issue identity within the fenced symbolization transaction. Old links resolve within the authenticated scope/window; ambiguous splits return `409 ambiguous_issue_fingerprint`. Raw replay identity remains unchanged; previously exported SigNoz records are not rewritten. See ADR 0009.
+## 能力概览
 
-Migration `20260912_0006` widens release/build/variant storage to match the existing 256-byte SDK protocol, including symbol identities and human release decisions. Apply migrations before rolling out this version; a downgrade refuses to narrow columns while values longer than 128 characters exist. Ingest headers, artifact uploads and query filters share the same 256-byte limit.
+| 领域 | 已实现 | 主要依据 |
+| --- | --- | --- |
+| 接收与持久化 | legacy Line / Protobuf、V2/V3 显式 envelope、有界 Gzip、整批校验、提交后精确 ACK、安装身份入库前 HMAC 假名化 | [协议](docs/02-SDK-Collector协议.md)、[ADR 0006](docs/adr/0006-发生时身份与installation假名化.md) |
+| 查询与诊断 | fixed-scope `apmq1` viewer/investigator/admin、发布健康、Issue 指纹、事件分页与 purpose-bound L2 raw、人工发布决策、HMAC 游标 | [总体架构](docs/01-总体架构.md)、[安全与租户](docs/03-安全与租户.md) |
+| Web 控制台 | 总览 / Issues / 事件 / 性能 / Trace / 版本 / 质量 / 告警 / 设置；一次交换短时 HttpOnly 会话 + 绑定 CSRF | [ADR 0007](docs/adr/0007-同源Web控制台与短时会话.md)、[本地功能](docs/11-本地产品功能.md) |
+| 性能与告警 | 分位数/趋势/覆盖/版本差值、独立 evaluator + outbox、规则启停/静默/确认、管理面凭据与签名配置生命周期 | [ADR 0010](docs/adr/0010-本地性能告警与管理面.md)、[统计契约](docs/12-统计契约与口径.md) |
+| 符号化 | 独立 CI key、Java mapping / 未剥离 Native ELF 有界上传、按精确 build-id 路由、租约 + 输出上限、部分解析状态 | [符号化与远程配置](docs/06-符号化与远程配置.md)、[ADR 0009](docs/adr/0009-符号化Issue指纹与旧链接.md) |
+| 运维 | 保留期证据状态、容量准入背压、私有 worker 指标、异常日志脱敏、逐信号导出计划与 lease fencing | [ADR 0008](docs/adr/0008-保留策略与容量准入.md)、[部署与运维](docs/08-部署与运维.md)、[ADR 0011](docs/adr/0011-运行会话统计与多信号导出.md) |
 
-Trend buckets carry nullable counts: absent or V2-only occurrence evidence is never filled with zero. Release buckets include `newState`/`baselineState`; the console leaves gaps disconnected and shows an empty state when nothing is observable. The overview trust banner includes both releases' quality gates, including minimum installation samples.
+符号化、OTLP Metrics / Traces 默认**关闭**（opt-in），SigNoz 告警模板仍是 `channels: []` / `production_ready=false` 的未就绪模板。
 
-Exception logs retain only the exception type and bounded code locations. Application, worker and Uvicorn handlers omit exception messages, SQL parameters, chained causes, source lines and locals; the production SQLAlchemy engine also enables `hide_parameters=True`.
-
-The export worker executes bounded raw retention every 60 seconds (up to 1000 rows): delivered evidence after 7 days, dead letters after 30 days, and quota windows after 24 hours. Active export/symbol jobs are preserved. Minimal event/hash/HMAC-version records remain for replay protection; expired raw reads return audited `410 raw_evidence_expired`. New ingest batches exceeding 100000 live events or 10 GiB retained canonical raw bytes roll back with retryable 503; duplicate-only replay still ACKs. See ADR 0008 and migration `20260907_0005`.
-
-Backlog metrics now use live database snapshots with explicit availability/freshness. Export and symbolizer counters are scraped from their own private listeners (`9101`/`9102`, loopback by default); Compose exposes them only inside its network. Use `deploy/prometheus-scrape.yaml`; the public Caddy route rejects `/metrics`.
-
-Ingest/CI/Query key verification uses a shared, bounded two-thread Argon2 executor. A fixed-memory, per-process 20 attempts/second token bucket (burst 40) runs before key lookup. Saturation returns retryable `429 authentication_busy` with `Retry-After: 1`; cancellation does not release a running hash's memory slot. Unknown key IDs use the same executor for dummy verification.
-
-Query filters run in SQL before budgeting. SQL reduces repeated events into weighted occurrence buckets; `APM_QUERY_MAX_ROWS` bounds aggregate groups rather than raw events. Investigator pagination is independently page-bounded. Queries have a 5-second driver/PostgreSQL statement budget and never return partial aggregates; migration `20260907_0004` adds release/time and fingerprint/time indexes.
-
-Windows crossing installation HMAC key versions report `INSTALLATION_HMAC_CONTINUITY_BREAK` with null installation counts/ratios/deltas; event counts remain usable. Issue distributions and trends also preserve this gap. Replay verification still uses each row's original key version.
-
-Release installation ratios require complete occurrence identity, valid SDK emission/drop samples, no reported loss or late events, at least `APM_QUERY_MIN_INSTALLATIONS=100` installations and `APM_QUERY_MIN_SDK_HEALTH_COVERAGE=1.0` installation health coverage. Missing quality returns an explicit state and null ratio; observed event counts remain available.
-
-Console evidence is bound to its route, session scope and filter snapshot. Changed queries discard prior evidence, late responses are ignored, and failed refreshes cannot retain an actionable release decision panel. Failed audited submissions preserve the entered reason.
-
-Installation privacy is applied before normalization and symbol-job preparation: registered attributes, nested raw values/keys, and native identities use minimized evidence. An installation value embedded in a required event/routing/release identifier rejects the whole batch with `422 privacy_identity_conflict`; identity is never silently rewritten.
-
-AndroidAPM-Server is the backend for the [AndroidAPM](https://github.com/XZQ/AndroidAPM) SDK. It accepts legacy Line Protocol and length-prefixed Protobuf plus explicit Protobuf V2/V3 envelopes, durably deduplicates at-least-once deliveries, and exports allow-listed OpenTelemetry Logs to SigNoz. V3 binds release, build, installation, and optional native-frame identity to the event occurrence rather than its later upload batch.
-
-The project deliberately does not fork SigNoz. Android-specific ingestion, tenancy, symbolization, remote configuration, performance queries, persistent alert evaluation and scoped Web administration live here; SigNoz/ClickHouse remain the external exploration target. `main` is the sole local/remote branch.
-
-## Target architecture
+## 架构
 
 ```text
-AndroidAPM SDK
+AndroidAPM SDK (至少一次投递)
   -> HTTPS Gateway
-     -> authentication / tenant boundary / quota
-     -> gzip + Line Protocol / length-prefixed Protobuf / V2/V3 envelope decoding
-     -> schema validation
-     -> installation HMAC before durable persistence
-     -> PostgreSQL durable inbox + (tenant_id, event_id) deduplication
-     -> post-commit whole-batch ACK (V2/V3 require exact schema/batch/count headers)
-  -> leased export worker
-     -> OTLP logs / metrics
-  -> SigNoz ingester
-     -> ClickHouse
-     -> SigNoz dashboards and alerts
+       认证 / 租户边界 / 配额 -> 有界 Gzip 与 V2/V3 解码 -> schema 校验
+       -> installation HMAC -> PostgreSQL durable inbox + (tenant_id,event_id) 去重
+       -> 提交后整批 ACK（V2/V3 精确返回 schema/batch/count 头）
+  -> leased export worker -> OTLP Logs（默认） / Metrics·Traces（opt-in）
+  -> 外部 SigNoz -> ClickHouse -> Dashboard / 告警
 
-Release investigator
-  -> same-origin Web console
-  -> one-time apmq1 exchange -> short-lived HttpOnly session + CSRF
-  -> bounded Query/BFF aggregates and event metadata
-  -> audited purpose-bound raw access
-  -> human continue / pause / rollback decision record
+发布调查员
+  -> 同源 Web 控制台 -> apmq1 一次交换短时 HttpOnly 会话 + CSRF
+  -> 有界 Query/BFF 聚合与事件元数据 -> 审计后的 L2 raw
+  -> continue / pause / rollback 人工决策记录
 
-Trusted build CI
-  -> separately scoped CI key
-  -> bounded Java mapping / unstripped Native ELF upload
-  -> checksum + exact build identity + private artifact store
-  -> leased symbolizer worker
-  -> fixed argv R8 retrace / llvm-symbolizer adapter
+可信构建 CI
+  -> 独立 apmci1 凭据 -> Java mapping / 每 ABI 未剥离 ELF 上传（SHA-256 + 精确 build 身份）
+  -> 私有制品卷 -> leased symbolizer -> 固定 argv 的 R8 retrace / llvm-symbolizer
 ```
 
-## Delivery status
+完整目标架构与信号映射见 [总体架构](docs/01-总体架构.md) 和 [OTLP 映射与 SigNoz](docs/04-OTLP映射与SigNoz.md)。
 
-Current Normalization v4 registers 243 numeric fields / 66 exact event contracts / 29 fixed categories; the earlier v3 baseline had 70 reviewed fields. Invalid numeric values are excluded from indexed projections, and missing/unavailable/invalid states are never filled with zero. The export worker isolates deterministic mapping failures into recoverable dead letters; unexpected transport failures consume the normal bounded retry budget.
+## 快速开始
 
-The runnable foundation includes authenticated whole-batch ingestion, bounded Gzip/Line/legacy-Protobuf/V2/V3 decoding, exact versioned acknowledgement, distributed quota counters, durable idempotent Inbox, occurrence normalization, versioned installation HMAC, leased OTLP Logs export, signed remote configuration, and minimal SigNoz assets. It also includes independent CI credentials, immutable Java mapping/Native ELF registration, durable symbolization jobs, fixed-argv retrace/llvm-symbolizer adapters, and a fixed-scope Query/BFF.
+### 无 Docker 本地预览（Windows）
 
-The same-origin console provides overview, Issues/details, event exploration, releases, quality, performance, alerts and settings. Performance includes percentiles, coverage, trends and release comparisons across the 29 fixed categories of the v4 contract. Alerts have persistent rules, firing/recovery episodes, acknowledgement, silence and a leased retrying Webhook outbox. Administration includes scoped Query/Ingest/CI key lifecycle, effective pipeline/retention status, artifact metadata, signed configuration publication/rollback and audits; only independently provisioned `admin` credentials can manage them. Deep links survive reload. A raw `apmq1` becomes a revocable HttpOnly session and is never persisted by the browser. Standard session/device/OS/Trace contracts are optional server-side inputs that the current V4 SDK does not yet emit. SSO, KMS/HSM, real notification channels, backup/PITR rehearsal, SigNoz staging E2E and device-lab acceptance remain separate work even though an HTTPS deployment is live (see [cloud runtime](docs/13-云端运行环境.md)). Older SigNoz templates remain `production_ready=false`. Release gates now include `scripts/check_secrets.py` (CI), `scripts/check_production_config.py` (pre-deployment, never prints values), `scripts/check_tls_expiry.py` with the opt-in `tls-monitor` workflow, and `scripts/verify_docs.py` validation of the Alembic head and four declared application versions; see [cloud runtime](docs/13-云端运行环境.md) and the required finish checks in `AGENTS.md`.
-
-See [local product operations](docs/11-本地产品功能.md). Windows: `./scripts/start-local.ps1 -ClientRepo D:\BaiduSyncdisk\workspace\AndroidAPM` prepares ignored short-lived credentials, development data, Android debug V3/configuration and API/alert/retention processes.
-
-The authoritative product plan is [docs/00-总体规划.md](docs/00-%E6%80%BB%E4%BD%93%E8%A7%84%E5%88%92.md), the real client event/data contract is [docs/04-OTLP映射与SigNoz.md](docs/04-OTLP%E6%98%A0%E5%B0%84%E4%B8%8ESigNoz.md), the user/query/alert scenarios are [docs/05-Dashboard与告警.md](docs/05-Dashboard%E4%B8%8E%E5%91%8A%E8%AD%A6.md), and local Web/cloud handoff is [docs/10-Web控制台与本地联调.md](docs/10-Web%E6%8E%A7%E5%88%B6%E5%8F%B0%E4%B8%8E%E6%9C%AC%E5%9C%B0%E8%81%94%E8%B0%83.md). Current proof and external blockers are in [docs/PROJECT_HANDOFF.md](docs/PROJECT_HANDOFF.md). The cloud-wide backlog remains [docs/云端待建设清单.md](docs/%E4%BA%91%E7%AB%AF%E5%BE%85%E5%BB%BA%E8%AE%BE%E6%B8%85%E5%8D%95.md).
-
-## Planned local workflow
-
-The Gateway targets Python 3.11 and uses `uv` for reproducible environments. PostgreSQL is the production persistence boundary. Docker Compose will provide the local Gateway/PostgreSQL stack; SigNoz is installed from its official Foundry release and is not vendored into this repository.
-
-```powershell
-uv sync --all-groups --frozen
-uv run ruff check .
-uv run mypy src
-uv run pytest
-pnpm --dir web install --frozen-lockfile
-pnpm --dir web run lint
-pnpm --dir web run typecheck
-pnpm --dir web run test
-pnpm --dir web run build
-```
-
-No production readiness claim is valid until the end-to-end and deployment checks in `docs/07-测试与验收.md` pass.
-
-For the complete no-Docker local preview, including an ignored SQLite compatibility database, synthetic Crash/ANR fixture, one-day investigator/ingest keys, built Web assets, and the API server:
+一条命令准备被忽略的 `.local/` 配置、短期凭据、SQLite 兼容库、合成事件、Web 产物，并启动 API 与告警进程：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\start-local.ps1
 ```
 
-Open `http://127.0.0.1:8080` and paste the printed Query key. Synthetic rows are explicitly local UI fixtures, not production evidence. The printed ingest key can be used by an Android debug build after `adb reverse tcp:8080 tcp:8080`; production uses HTTPS and short-lived app tokens. See [docs/10-Web控制台与本地联调.md](docs/10-Web%E6%8E%A7%E5%88%B6%E5%8F%B0%E4%B8%8E%E6%9C%AC%E5%9C%B0%E8%81%94%E8%B0%83.md).
+打开 `http://127.0.0.1:8080`，粘贴终端打印的 Query key。可选参数：`-PrepareOnly`（只准备不启动）、`-SkipSeed`、`-SkipSync`、`-ClientRepo <AndroidAPM 路径>`。合成数据只是本地 UI fixture，**不是生产证据**；打印的 ingest key 可在 `adb reverse tcp:8080 tcp:8080` 后用于 Android debug 构建。详见 [Web 控制台与本地联调](docs/10-Web控制台与本地联调.md)。
 
-## Local database and first key
-
-After PostgreSQL is available:
+### 完整开发栈（需要 PostgreSQL）
 
 ```powershell
+uv sync --all-groups --frozen
 uv run alembic upgrade head
 uv run androidapm-admin create-ingest-key `
   --tenant-id local --tenant-name Local `
@@ -121,34 +78,91 @@ uv run androidapm-api
 uv run androidapm-worker
 ```
 
-The CLI prints the ingest key once. Store it in a secret manager; the database retains only its Argon2id hash.
+其它进程入口：`androidapm-alerts`、`androidapm-symbolizer`、`androidapm-admin`（定义见 [pyproject.toml](pyproject.toml)）。容器编排见 [compose.yaml](compose.yaml) 与 [compose.production.yaml](compose.production.yaml)；本地 Compose 不含 SigNoz / ClickHouse，OTLP 端点必须外部提供，否则导出失败并堆积 dead letter。
 
-Before accepting installation-bearing V2 or any V3 event, configure `APM_INSTALLATION_HMAC_KEYS_JSON` as a JSON map from key version to a Base64 secret of at least 32 random bytes and set `APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION`. The Gateway fails closed when pseudonymization is unavailable. Rotation keeps old key versions readable so a duplicate replay is compared with the version stored on its original row; never remove an old version until its retained rows can no longer replay.
+## 配置与凭据
 
-Create a separately scoped query credential for one tenant/app/environment and role:
+三类凭据**互相独立、前缀互不接受**；数据库只保存 Argon2id 哈希，明文只在创建时显示一次，应放入 secret manager。
 
-```powershell
-uv run androidapm-admin create-query-key `
-  --tenant-id local --tenant-name Local `
-  --app-id com.example.app --environment production `
-  --role investigator
-```
-
-The one-time `apmq1` value is not an ingest or CI key. `viewer` can read L0 aggregates only; `investigator` can additionally read L1/L2 event data and record human `continue/pause/rollback` decisions. Event pagination also requires `APM_QUERY_CURSOR_HMAC_KEY_B64`, a dedicated Base64 secret of at least 32 random bytes. Empty or weak cursor configuration fails closed rather than returning unsigned pagination state.
-
-Remote configuration revisions are immutable and Ed25519-signed. Generate a local keypair with `uv run androidapm-admin generate-config-keypair`, put only the private key in the server secret store, and pin the printed public key in the Android client before enabling config polling.
-
-## Symbol artifacts
-
-Artifact upload never accepts an APK ingest key. Create a separately scoped build credential:
+| 凭据 | 用途 | 约束 |
+| --- | --- | --- |
+| ingest key | SDK 上报 | 与 Query/CI 凭据不同前缀，撤销即时生效 |
+| `apmq1` Query key | 固定 tenant/app/environment 与角色 | `viewer` 只能读 L0；`investigator` 才可读 L1/L2 并写决策 |
+| `apmci1` CI key | 符号制品上传 | 制品上传接口不接受 ingest key |
 
 ```powershell
-uv run androidapm-admin create-ci-key `
-  --tenant-id local --tenant-name Local --app-id com.example.app
+uv run androidapm-admin create-ingest-key --tenant-id local --tenant-name Local --app-id com.example.app --environment development
+uv run androidapm-admin create-query-key --tenant-id local --tenant-name Local --app-id com.example.app --environment production --role investigator
+uv run androidapm-admin create-ci-key --tenant-id local --tenant-name Local --app-id com.example.app
 ```
 
-CI uploads raw `mapping.txt` to `POST /v1/artifacts/java-mapping` and one unstripped ELF per ABI/build-id to `POST /v1/artifacts/native-elf`. Requests include the exact app/versionCode/appBuild/variant identity and expected SHA-256 documented in [docs/06-符号化与远程配置.md](docs/06-%E7%AC%A6%E5%8F%B7%E5%8C%96%E4%B8%8E%E8%BF%9C%E7%A8%8B%E9%85%8D%E7%BD%AE.md).
+关键配置（完整样例见 [.env.example](.env.example) 与 [.env.production.example](.env.production.example)）：
 
-`androidapm-symbolizer` is disabled by default. Enable it only after mounting the private artifact volume and configuring fixed JSON argv arrays plus audited tool versions for R8 retrace and llvm-symbolizer. The base Python image deliberately does not download mutable tool binaries during startup.
+- 接收含 installation 的 V2 或任何 V3 事件前，必须配置 `APM_INSTALLATION_HMAC_KEYS_JSON`（版本 → 至少 32 字节 Base64）与 `APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION`；不可用时 Gateway **fail closed**。轮换时保留旧版本，直到对应行不可能再重放。
+- 事件分页另需独立的 `APM_QUERY_CURSOR_HMAC_KEY_B64`；Web 会话另需 `APM_WEB_SESSION_HMAC_KEY_B64`，生产还要求 `APM_WEB_SESSION_COOKIE_SECURE=true`。空或弱配置一律 fail closed。
+- `viewer` 只能读 L0 聚合；`investigator` 可额外读 L1/L2 并记录发布决策；只有独立创建的 `admin` 能管理当前 scope 的凭据、配置、告警和应用名称。既有凭据不会自动提权。
+- 远程配置版本不可变且用 Ed25519 签名：`uv run androidapm-admin generate-config-keypair`，私钥只放服务端，公钥固定到客户端后再开启轮询。
 
-The symbolizer claims one job immediately before execution; `APM_SYMBOLIZER_BATCH_SIZE` limits work per cycle, without reserving queued leases. Each claim gets a fresh fencing token. Artifact resolution, tool execution and completion share a deadline five seconds before lease expiry, with tool timeout strictly below that budget. Cancellation/timeout kills and reaps the direct tool process. Missing-artifact polls spend no tool attempts. Both workers reject expired completion/failure writes using the PostgreSQL clock, and outcome counters follow committed transitions.
+部署前执行 `python scripts/check_production_config.py --env-file .env.production` 做强校验；它只输出键名与失败原因，不打印任何值，也不会改变 local/test 的启动行为。
+
+## 符号化制品
+
+```powershell
+uv run androidapm-admin create-ci-key --tenant-id local --tenant-name Local --app-id com.example.app
+```
+
+CI 将 `mapping.txt` 上传到 `POST /v1/artifacts/java-mapping`，每个 ABI/build-id 的未剥离 ELF 上传到 `POST /v1/artifacts/native-elf`，请求需带精确 app/versionCode/appBuild/variant 身份与期望 SHA-256，格式见 [符号化与远程配置](docs/06-符号化与远程配置.md)。
+
+`androidapm-symbolizer` 默认关闭。仅在挂载私有制品卷、配置固定 JSON argv 与已审计工具版本后启用；基础镜像刻意不在启动时下载可变工具二进制。真实 R8 / 每 ABI Native 崩溃 fixture 与生产工具镜像仍属待验收项。
+
+## 验证与发布门禁
+
+```powershell
+uv run ruff check .
+uv run mypy src
+uv run pytest
+uv run python scripts/verify_docs.py
+uv run python scripts/check_secrets.py
+pnpm --dir web run lint
+pnpm --dir web run typecheck
+pnpm --dir web run test
+pnpm --dir web run build
+git diff --check
+```
+
+完整收尾顺序见 [AGENTS.md](AGENTS.md)。最近一次本机结果：后端 **539 passed / 1 skipped**（skip 为未配置 `APM_TEST_NDK_BIN`）、mypy 63 files、15 份必需文档、前端 8 suites / 27 tests 与生产构建全绿；CI 另执行 PostgreSQL 集成、迁移往返、production overlay `compose config` 与镜像构建。本机无 Docker/PostgreSQL/SigNoz，`integration_tests/` 需要 `APM_TEST_POSTGRES_URL`。门禁口径见 [测试与验收](docs/07-测试与验收.md)。
+
+## 部署与未完成的验收
+
+云端已有一条运行中的 HTTPS 部署，但**部署形态未纳管**：对外容器带 `public-trial` 前缀、存在空跑 gateway、反代配置与仓库资产存在差异，且线上仍是本轮加固前的构建。服务器侧 P0 待办包括回收实际 compose/Caddy/环境变量、处理主机安全事件、为短期证书设置 `APM_PUBLIC_HOST` 仓库变量以启用到期巡检、确认外部 OTLP 接收端与 dead letter、执行备份/PITR 演练。完整清单见 [云端运行环境](docs/13-云端运行环境.md) 与 [云端待建设清单](docs/云端待建设清单.md)。
+
+发布前不得把以下项目标记为通过：真实 SigNoz staging E2E 与 Dashboard/告警、通知渠道触发/恢复、真实 R8/每 ABI 符号化、SSO/KMS/HSM、备份恢复与故障注入、容量与 72h soak、物理设备采集、PostgreSQL 生产并发与 TLS 现场验收。
+
+## 文档索引
+
+| 主题 | 文档 |
+| --- | --- |
+| 规划、架构与协议 | [00 总体规划](docs/00-总体规划.md) · [01 总体架构](docs/01-总体架构.md) · [02 SDK-Collector 协议](docs/02-SDK-Collector协议.md) |
+| 安全与信号 | [03 安全与租户](docs/03-安全与租户.md) · [04 OTLP 映射与 SigNoz](docs/04-OTLP映射与SigNoz.md) · [05 Dashboard 与告警](docs/05-Dashboard与告警.md) |
+| 符号化与产品 | [06 符号化与远程配置](docs/06-符号化与远程配置.md) · [11 本地产品功能](docs/11-本地产品功能.md) · [12 统计契约与口径](docs/12-统计契约与口径.md) |
+| 工程与运维 | [07 测试与验收](docs/07-测试与验收.md) · [08 部署与运维](docs/08-部署与运维.md) · [09 实施路线图](docs/09-实施路线图.md) · [10 Web 控制台与本地联调](docs/10-Web控制台与本地联调.md) |
+| 现状与待办 | [13 云端运行环境](docs/13-云端运行环境.md) · [PROJECT_HANDOFF](docs/PROJECT_HANDOFF.md) · [云端待建设清单](docs/云端待建设清单.md) |
+| 架构决策 | [docs/adr/](docs/adr/)（0001–0011） |
+
+## 关键不变量
+
+- `2xx` ingest 表示整批已持久提交；V2/V3 还必须在提交后精确返回 `X-Apm-Schema-Version` / `X-Apm-Batch-Id` / `X-Apm-Event-Count`。非 `2xx` 绝不能让客户端删批。
+- 混合合法/非法批次整体拒绝；重复 `eventId` 重放返回成功 ACK 且不重复进入下游。
+- PostgreSQL 是生产 inbox，SQLite / 内存实现只是测试替身，不得当作生产 durability 保证。
+- worker 使用 owner/lease/expiry 认领，只有活跃 owner 能标记 delivered 或 failed。
+- 租户身份只来自认证凭据；raw secret 永不落库，凭据可撤销、可轮换、可审计。
+- V2 resource 是上传批次声明 `BATCH_DECLARED`；V3 occurrence 身份冻结为 `OCCURRENCE_BOUND`，两者不可混用。
+- 缺失、不可用、无效、覆盖未知、迟到与真实零是不同状态；**缺失指标和分母绝不补零**。
+- URL / SQL / 堆栈 / 异常消息 / 任意 context 等高基数或敏感字段不默认进入 OTLP 属性索引。
+- 浏览器不持久化 raw `apmq1`；生产会话要求 HTTPS Secure Cookie、独立签名 key 与 ambient-cookie 写入的 CSRF 校验。
+
+完整不变量清单见 [AGENTS.md](AGENTS.md)。
+
+## 许可
+
+[Apache-2.0](LICENSE)
