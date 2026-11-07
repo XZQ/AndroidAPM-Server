@@ -226,7 +226,7 @@ docker compose --env-file .env.production \
   -f compose.yaml -f compose.production.yaml ps
 ```
 
-只有固定 R8/LLVM 镜像和真实制品准备后才附加 `--profile symbolization`。基础 `gateway:8080` 默认只绑定宿主 `127.0.0.1`，公网由 Caddy 暴露 80/443；安全组仍必须阻止数据库、OTLP 和 SigNoz 内部端口。2026-11-07 起 `deploy/caddy/Caddyfile` 为所有响应补 HSTS / nosniff / frame-deny / no-referrer，并屏蔽公开 `/docs`、`/openapi.json`、`/redoc`；`reverse_proxy` 主动健康检查使用确认 inbox schema 的 `/health/ready`。线上仍是旧配置，需重新部署才生效。
+只有固定 R8/LLVM 镜像和真实制品准备后才附加 `--profile symbolization`。基础 `gateway:8080` 默认只绑定宿主 `127.0.0.1`，公网由 Caddy 暴露 80/443；安全组仍必须阻止数据库、OTLP 和 SigNoz 内部端口。2026-11-07 起 `deploy/caddy/Caddyfile` 为所有响应补 HSTS / nosniff / frame-deny / no-referrer，并屏蔽公开 `/docs`、`/openapi.json`、`/redoc`；`reverse_proxy` 主动健康检查使用进程级 `/health/live`（连续 3 次失败才判不可用），确认 inbox schema 的 `/health/ready` 留作部署流程发布前的轮询门禁。线上仍是旧配置，需重新部署才生效。
 
 2026-11-07 更新：云厂商/地域与服务器公网地址已确定（首尔轻量应用服务器，具体地址只保存在被忽略的 `.local/SERVER-CONFIG.md`），但**域名及 DNS 控制权仍未设置**，是否使用托管 PostgreSQL、数据保留天数和通知渠道仍待确认。当前线上部署形态未纳管，重建或升级前必须先回收配置；本机无 Docker，本节命令未在本轮实际执行。除此之外，本地代码、网页、镜像构建链和联调入口已经准备好。
 # 2026-09-07 页面证据一致性

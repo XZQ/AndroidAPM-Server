@@ -69,6 +69,14 @@ def test_explicit_sqlite_database_url_override_is_rejected() -> None:
     assert any("APM_DATABASE_URL" in failure for failure in config.validate(values))
 
 
+def test_ip_literal_public_host_is_accepted() -> None:
+    """An IP-only public entry point is valid; no DNS domain is required."""
+    config = load("check_production_config")
+    values = valid_configuration()
+    values["APM_DOMAIN"] = "203.0.113.10"  # RFC 5737 documentation address
+    assert not any("APM_DOMAIN" in failure for failure in config.validate(values))
+
+
 def test_weak_keys_and_insecure_cookies_are_rejected() -> None:
     config = load("check_production_config")
     values = valid_configuration()
@@ -100,6 +108,14 @@ def test_certificate_expiry_math_uses_utc() -> None:
         5.95, abs=0.02
     )
     assert expiry.remaining_days("Nov  1 00:00:00 2026 GMT", now) < 0
+
+
+def test_default_threshold_accepts_a_fresh_short_lived_certificate() -> None:
+    """A ~6-day certificate must not fail the probe when no flag is supplied."""
+    expiry = load("check_tls_expiry")
+    now = datetime(2026, 11, 7, tzinfo=UTC)
+    fresh = expiry.remaining_days("Nov 12 22:41:30 2026 GMT", now)
+    assert fresh > expiry.DEFAULT_MIN_DAYS
 
 
 def test_secret_scan_flags_real_keys_but_not_fixtures_or_placeholders() -> None:

@@ -16,11 +16,16 @@
     }
 
     reverse_proxy gateway:8080 {
-        # Container liveness only proves the process is alive; proxy health must also
-        # prove the durable inbox schema is reachable before routing traffic.
-        health_uri /health/ready
+        # Active checks run on a background timer; they never gate an individual request.
+        # There is only one upstream, so a DB-coupled /health/ready probe adds no
+        # failover benefit while a single transient DB error (health_fails defaults
+        # to 1) can mark the only backend down. Proxy on liveness instead; the deploy
+        # process polls /health/ready (which verifies inbox_events) before declaring
+        # a rollout successful. Require several consecutive misses as a safeguard.
+        health_uri /health/live
         health_interval 15s
         health_timeout 3s
+        health_fails 3
     }
 
     log {

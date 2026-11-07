@@ -1,7 +1,9 @@
-"""Scan Git-tracked text files for accidentally committed plaintext credentials.
+"""Scan candidate text files for accidentally committed plaintext credentials.
 
-Only tracked files are inspected, so ignored local runtime material (`.local/`,
-`.env.*`) is never read or reported. Matches are redacted in the output.
+Both tracked files and untracked-but-not-ignored files are inspected, so a secret
+about to be staged is caught before it enters the index. Git-ignored local
+runtime material (`.local/`, `.env.*`) is never read or reported. Matches are
+redacted in the output.
 """
 
 from __future__ import annotations
@@ -87,7 +89,7 @@ def findings(text: str) -> list[str]:
 
 
 def main() -> int:
-    """Return non-zero when any tracked file appears to contain a plaintext secret."""
+    """Return non-zero when any candidate file appears to contain a plaintext secret."""
     failures: list[str] = []
     for path in candidate_files():
         if path.suffix.lower() in BINARY_SUFFIXES or not path.is_file():
@@ -101,7 +103,7 @@ def main() -> int:
         for failure in failures:
             print(f"ERROR: possible plaintext credential in {failure}", file=sys.stderr)
         return 1
-    print("Tracked-file secret scan passed.")
+    print("Candidate-file secret scan passed (tracked + untracked, non-ignored).")
     return 0
 
 

@@ -3,6 +3,10 @@
 The cloud deployment uses short-lived certificates issued to an IP address with
 HTTP-01 unavailable, so an external expiry probe is the only early warning that
 does not depend on shell access. No private data or raw exception text is emitted.
+
+The default threshold matches those short-lived certificates: a freshly issued
+one has roughly six days left, so a generic 7-day default would report a false
+alarm immediately. Long-lived certificates can pass --min-days explicitly.
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ import socket
 import ssl
 from datetime import UTC, datetime
 
-DEFAULT_MIN_DAYS = 7.0
+DEFAULT_MIN_DAYS = 3.0
 SECONDS_PER_DAY = 86_400.0
 
 

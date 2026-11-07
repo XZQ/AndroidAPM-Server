@@ -2,18 +2,37 @@
 
 > 当前基线：2026-11-07，服务端唯一分支 `main`。本文区分“本机已验证”“公网只读已验证”和“需要外部环境验证”，历史条目保留当时事实。
 
+## 2026-11-07 复核轮（review 结论再验证与修复）
+
+对上一轮 review 的 6 条意见逐条复核，只修确认为真的问题，撤回不能证实的结论：
+
+| 意见 | 复核判定 | 处理 |
+|---|---|---|
+| ① Caddy `health_uri /health/ready` 导致「DB 抖动 → 全站 502」 | **撤回强结论**：核对 Caddy 官方 `reverse_proxy` 文档全文，未找到「所有 upstream 不健康时忽略健康状态」的表述，502 因果链无法证实 | 仍做风险收敛：单 upstream 的主动检查是后台定时器、不门禁单个请求，而 `health_fails` 默认 1 会把一次瞬时 DB 抖动放大。改回 `/health/live` 并设 `health_fails 3`；含 `inbox_events` 的 `/health/ready` 留作部署发布前轮询 |
+| ② `ConsoleLayout` 把缺省 `environment` 显示成「已连接 远端 服务」 | 成立 | 增加「部署环境未知」第三态，不再把未知当真实部署，也不丢合成预览警告分支 |
+| ③ `check_tls_expiry.py` 默认 7 天 vs 约 6 天短证书 | 成立 | 默认改 3.0，与 workflow / 文档一致，新增回归 |
+| ④ `check_secrets.py` 文案称只扫 tracked，实现还扫 untracked | 成立 | 模块 / 函数 docstring 与成功提示统一为 candidate files 口径 |
+| ⑤ 用 `/docs` 404 反推 `APM_ENVIRONMENT=production` | 成立 | 新 Caddyfile 无条件 404 `/docs`，观测不唯一；`docs/13` 与本文改为「运行时环境未核实」，指向 `/v1/web/session.environment` 或服务器侧只读清单 |
+| ⑥ `check_production_config.py` 要求 `APM_DOMAIN` 与「域名未设置」不兼容 | **撤回**：实测 IP 字面量通过校验（只要求非占位且含点），且该脚本是部署前置检查、不是线上状态断言 | 补注释说明 IP-only 入口合法，新增文档保留地址回归 |
+
+另复核：默认 pytest 临时目录下的 4 个 `test_artifact_api.py` 失败是本文早已记载的**既有 Windows MAX_PATH 问题**（制品 storage_key 的 16+12+64+64 段把目标路径撑到 262 字符），不是 `a0d75e1` 引入，也不改制品持久化实现；按历史条目记载的短 `--basetemp` 重跑即全绿。本轮把该前置条件写进验证记录，避免「全绿」被误读为默认环境也通过。
+
+**本轮验证（本机）**：Ruff、mypy 63 files、`pytest --basetemp <短目录>` **541 passed / 1 skipped**（skip 为未配置 `APM_TEST_NDK_BIN`；默认长 Temp 下仍有 4 个既有 artifact 长路径失败）、15 份文档与 Alembic head / 四处版本号一致性、凭据扫描、`git diff --check` 全过；前端 ESLint、TypeScript、**8 suites / 28 Vitest tests**、生产 build（JS 319.12 kB / gzip 100.28 kB）通过。本机仍无 Docker CLI，production overlay `compose config` 与镜像 build 由 CI 验证。
+
+**发布状态**：本轮完成代码与文档修复、提交推送；线上仍是旧镜像（仍有 `Server: uvicorn`、无 HSTS），**尚未重新部署**。本机无 SSH 私钥、云 API 凭据、tccli 或 Docker CLI，无法直接登录云端；发布需在云控制台 OrcaTerm / 自动化助手执行，见 `docs/13` 第 4、5 节。
+
 ## 2026-11-07 云端事实纠偏与缺口收尾
 
 本轮先复核运行现实，再按证据逐项修复可在本机闭环的缺口。
 
-**运行事实**：服务已在首尔轻量应用服务器以 HTTPS 对外运行；2026-11-07 直连复核 `/health/live`、`/health/ready` 均 200，`GET /` 200 且带完整页面安全头，`/docs`、`/openapi.json`、`/metrics` 404，未鉴权 `/v1/alerts` 401，仅 22/443 可达；Let's Encrypt 短期证书 `notAfter 2026-11-12 22:41:30 UTC`。运行时 `APM_ENVIRONMENT` 与 Query Key 的数据 `environment` scope 是两个概念：`/docs` 404 说明运行时为 `production`，历史记录中的 `staging` 指凭据 scope。公网可达不代表 SigNoz、通知、备份、SSO、真机或容量验收通过。详见 `13-云端运行环境.md`。
+**运行事实**：服务已在首尔轻量应用服务器以 HTTPS 对外运行；2026-11-07 直连复核 `/health/live`、`/health/ready` 均 200，`GET /` 200 且带完整页面安全头，`/docs`、`/openapi.json`、`/metrics` 404，未鉴权 `/v1/alerts` 401，仅 22/443 可达；Let's Encrypt 短期证书 `notAfter 2026-11-12 22:41:30 UTC`。运行时 `APM_ENVIRONMENT` 与 Query Key 的数据 `environment` scope 是两个概念，历史记录中的 `staging` 指凭据 scope；`/docs` 404 **不能反推运行时为 `production`**（仓库 Caddyfile 会无条件对 `/docs` 返回 404，`main.py` 也会在非 production 关闭 docs，观测结果相同），运行时环境仍属**未核实**，应通过 `/v1/web/session.environment` 或服务器侧只读清单确认。公网可达不代表 SigNoz、通知、备份、SSO、真机或容量验收通过。详见 `13-云端运行环境.md`。
 
 **此前文档缺陷**：`AGENTS.md`、`README.md`、`docs/08`、`云端待建设清单.md` 及本文最新条目仍停留在"未部署 / 本机无 Docker"的 2026-11-02 视角；`README` 内 v3/70 与 v4/243 口径冲突，`AGENTS.md` / `云端待建设清单.md` 内 "durable V5 已完成" 与 "SDK 仍为 V4" 并存。
 
 **本轮变更**：
 
 - 新增 `docs/13-云端运行环境.md`（脱敏），记录公网事实、部署形态差异、运行时开关、P0 服务器侧待办、只读配置回收清单与历史误判更正；同步修正 `AGENTS.md` 阅读顺序与基线、`README.md`、`docs/08-部署与运维.md`、`云端待建设清单.md` 的过期口径。
-- 反代与响应头：`deploy/caddy/Caddyfile` 为所有响应补 HSTS / nosniff / X-Frame-Options / Referrer-Policy，统一屏蔽 `/docs`、`/openapi.json`、`/redoc`；`Dockerfile` 与 `main.py` 禁用 uvicorn `Server` 头；`reverse_proxy` 主动健康检查改用 `/health/ready`。
+- 反代与响应头：`deploy/caddy/Caddyfile` 为所有响应补 HSTS / nosniff / X-Frame-Options / Referrer-Policy，统一屏蔽 `/docs`、`/openapi.json`、`/redoc`；`Dockerfile` 与 `main.py` 禁用 uvicorn `Server` 头；`reverse_proxy` 主动健康检查保持进程级 `/health/live` 并要求连续 3 次失败（2026-11-07 复核轮更正，原「改用 `/health/ready`」已撤回）。
 - `/health/ready` 从仅 `SELECT 1` 增强为同时确认 inbox schema 已迁移，避免"进程活着但表不存在"被判为就绪。
 - Web 会话响应新增运行时 `environment` 字段，控制台页脚按环境显示证据提示；`local` 仍明确标注合成预览，不再在真实部署上无条件显示"synthetic preview 不能代表生产部署"。
 - 新增 `scripts/check_production_config.py`（部署前置配置强校验，不改动运行时启动行为）、`scripts/check_tls_expiry.py`（证书到期巡检）、`scripts/check_secrets.py`（被跟踪文件明文凭据扫描）；`scripts/verify_docs.py` 增加文档清单、Alembic head 与版本号一致性校验；`.github/workflows/tls-monitor.yml` 在配置仓库变量 `APM_PUBLIC_HOST` 后每日巡检短期证书。

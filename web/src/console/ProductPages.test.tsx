@@ -61,6 +61,14 @@ it("keeps the synthetic-preview warning when the runtime is local", async () => 
   expect(await screen.findByText(/synthetic preview 不能代表生产部署/)).toBeInTheDocument();
 });
 
+it("marks an unknown runtime environment instead of claiming a real deployment", async () => {
+  setup("performance", "viewer"); // older backend: no environment field
+  await screen.findByRole("heading", { name: "性能分析" });
+  expect(screen.getByText(/部署环境未知/)).toBeInTheDocument();
+  expect(screen.queryByText(/已连接 .* 服务/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/synthetic preview 不能代表生产部署/)).not.toBeInTheDocument();
+});
+
 it("renders performance observations and distinguishes unavailable from observed zero", async () => {
   setup("performance", "viewer");
   await screen.findByRole("heading", { name: "性能分析" });

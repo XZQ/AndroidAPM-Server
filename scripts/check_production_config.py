@@ -120,6 +120,8 @@ def _validate_infrastructure(values: dict[str, str], failures: list[str]) -> Non
         not database_url.startswith("postgresql") or is_placeholder(database_url)
     ):
         failures.append("APM_DATABASE_URL: override must point at PostgreSQL, not SQLite")
+    # APM_DOMAIN is Caddy's site address. A public IP literal is accepted: the
+    # existing IP-only deployment has no DNS name, and an IP satisfies this check.
     domain = values.get("APM_DOMAIN", "")
     if is_placeholder(domain) or "." not in domain:
         failures.append("APM_DOMAIN: missing or example-only")

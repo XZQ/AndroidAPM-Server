@@ -67,10 +67,11 @@ def test_public_proxy_hardens_all_responses_and_hides_upstream_server_header() -
     assert 'Referrer-Policy "no-referrer"' in caddyfile
     assert "respond @private_paths 404" in caddyfile
     assert "/openapi.json" in caddyfile
-    assert "health_uri /health/ready" in caddyfile
+    assert "health_uri /health/live" in caddyfile
+    assert "health_fails 3" in caddyfile
 
-    # The upstream must stop emitting its own Server header; container liveness stays
-    # process-level while the reverse proxy checks the database-backed readiness probe.
+    # The upstream must stop emitting its own Server header; both container and proxy
+    # checks stay on process liveness, while readiness is verified at deploy time.
     assert "--no-server-header" in dockerfile
     assert "server_header=False" in main
     assert "health/live" in dockerfile
