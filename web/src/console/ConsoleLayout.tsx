@@ -48,6 +48,13 @@ export function ConsoleLayout({ value }: { value: ConsoleContextValue }) {
   }
 
   const rangeHours = Math.round((filters.toMs - filters.fromMs) / 3_600_000);
+  // The backend reports its runtime environment; only an explicit "local" label
+  // justifies the synthetic-preview warning. Older backends omit the field.
+  const runtimeEnvironment = session.environment ?? "";
+  const isLocalPreview = runtimeEnvironment.trim().toLowerCase() === "local";
+  const deploymentLabel = /^[A-Za-z0-9._-]{1,32}$/.test(runtimeEnvironment)
+    ? runtimeEnvironment
+    : "远端";
   return (
     <div className="console-shell" data-theme={dark ? "dark" : "light"}>
       <aside className={`console-sidebar ${menuOpen ? "open" : ""}`}>
@@ -116,7 +123,11 @@ export function ConsoleLayout({ value }: { value: ConsoleContextValue }) {
         </main>
         <footer className="console-footer">
           <span><ShieldCheck size={13} /> fixed tenant/app/environment</span>
-          <span><AlertTriangle size={13} /> synthetic preview 不能代表生产部署</span>
+          {isLocalPreview ? (
+            <span><AlertTriangle size={13} /> synthetic preview 不能代表生产部署</span>
+          ) : (
+            <span><DatabaseZap size={13} /> 已连接 {deploymentLabel} 服务 · 证据边界见各页状态</span>
+          )}
         </footer>
       </div>
     </div>

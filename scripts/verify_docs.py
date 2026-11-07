@@ -23,10 +23,13 @@ REQUIRED_DOCS = (
     "10-Web控制台与本地联调.md",
     "11-本地产品功能.md",
     "12-统计契约与口径.md",
+    "13-云端运行环境.md",
     "云端待建设清单.md",
 )
 MARKDOWN_LINK = re.compile(r"\[[^]]+]\(([^)]+)\)")
-IGNORED_MARKDOWN_DIRS = frozenset({".git", ".local", ".venv", "node_modules"})
+IGNORED_MARKDOWN_DIRS = frozenset(
+    {".git", ".local", ".venv", ".workbuddy", "node_modules"}
+)
 # Additive server-side occurrence fields are intentionally absent from older SDKs.
 # No existing field, scalar type, number or repetition may change.
 OPTIONAL_OCCURRENCE_EXTENSIONS = frozenset(
@@ -61,6 +64,8 @@ def main() -> int:
         if version not in versions or version not in plan:
             failures.append(f"SigNoz version drift: {version}")
 
+    failures.extend(version_and_migration_drift(docs_dir))
+
     client_cloud_list = ROOT.parent / "AndroidAPM" / "docs" / "云端待建设清单.md"
     if client_cloud_list.exists():
         failures.append("client repository still contains a duplicate cloud backlog")
@@ -78,6 +83,51 @@ def main() -> int:
         return 1
     print(f"Documentation verification passed ({len(REQUIRED_DOCS)} required documents).")
     return 0
+
+
+def alembic_heads() -> set[str]:
+    """Return revisions that no other migration names as its down_revision."""
+    revisions: set[str] = set()
+    parents: set[str] = set()
+    for path in (ROOT / "alembic" / "versions").glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        revision = re.search(r'^revision(?:\s*:\s*str)?\s*=\s*"([^"]+)"', text, re.MULTILINE)
+        down = re.search(r'^down_revision(?:\s*:[^=]+)?=\s*"([^"]+)"', text, re.MULTILINE)
+        if revision:
+            revisions.add(revision.group(1))
+        if down:
+            parents.add(down.group(1))
+    return revisions - parents
+
+
+def version_and_migration_drift(docs_dir: Path) -> list[str]:
+    """Reject stale documented migration heads and divergent application versions."""
+    failures: list[str] = []
+    heads = alembic_heads()
+    if len(heads) != 1:
+        failures.append(f"ambiguous Alembic head: {sorted(heads)}")
+    else:
+        head = next(iter(heads))
+        for path in (ROOT / "AGENTS.md", docs_dir / "PROJECT_HANDOFF.md"):
+            if head not in path.read_text(encoding="utf-8"):
+                failures.append(f"stale documented Alembic head in {path.relative_to(ROOT)}")
+
+    declared = (
+        (ROOT / "pyproject.toml", r'^version\s*=\s*"([^"]+)"'),
+        (ROOT / "src" / "androidapm_server" / "__init__.py", r'^__version__\s*=\s*"([^"]+)"'),
+        (ROOT / "src" / "androidapm_server" / "main.py", r'version="([^"]+)"'),
+        (ROOT / "web" / "package.json", r'"version"\s*:\s*"([^"]+)"'),
+    )
+    found: dict[str, str] = {}
+    for path, pattern in declared:
+        match = re.search(pattern, path.read_text(encoding="utf-8"), re.MULTILINE)
+        if match is None:
+            failures.append(f"missing version declaration in {path.relative_to(ROOT)}")
+        else:
+            found[path.relative_to(ROOT).as_posix()] = match.group(1)
+    if len(set(found.values())) > 1:
+        failures.append(f"application version drift: {found}")
+    return failures
 
 
 def markdown_files(root: Path) -> list[Path]:

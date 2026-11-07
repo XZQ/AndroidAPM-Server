@@ -72,6 +72,7 @@ def run() -> None:
         host="0.0.0.0",  # noqa: S104 - the container must accept traffic from its network.
         port=8080,
         proxy_headers=True,
+        server_header=False,
     )
 
 

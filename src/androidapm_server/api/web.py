@@ -54,6 +54,9 @@ class WebSessionResponse(QueryModel):
     scope: QueryScope
     role: str
     expires_at_ms: int
+    # Runtime deployment label (APM_ENVIRONMENT), not the Query Key data scope.
+    # The console uses it to distinguish a local synthetic preview from a real deployment.
+    environment: str
 
 
 @router.post("/session", response_model=WebSessionResponse)
@@ -83,7 +86,7 @@ async def create_session(
     await session.commit()
     _set_session_cookies(response, issued.token, issued.csrf_token, issued.expires_at, settings)
     _no_store(response)
-    return _session_response(request, principal, issued.expires_at)
+    return _session_response(request, principal, issued.expires_at, settings.environment)
 
 
 @router.get("/session", response_model=WebSessionResponse)
@@ -96,7 +99,7 @@ async def get_session_state(
     """Restore non-secret identity state after a page reload."""
     principal, claims = await authenticate_web_session(session, request, settings)
     _no_store(response)
-    return _session_response(request, principal, claims.expires_at)
+    return _session_response(request, principal, claims.expires_at, settings.environment)
 
 
 @router.delete("/session", status_code=204)
@@ -201,6 +204,7 @@ def _session_response(
     request: Request,
     principal: QueryPrincipal,
     expires_at: int,
+    environment: str,
 ) -> WebSessionResponse:
     """Build one typed response while keeping the Query principal implementation private."""
     return WebSessionResponse(
@@ -208,6 +212,7 @@ def _session_response(
         scope=scope_for(principal),
         role=principal.role,
         expires_at_ms=expires_at * 1_000,
+        environment=environment,
     )
 
 

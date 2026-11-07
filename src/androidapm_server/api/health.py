@@ -26,8 +26,10 @@ async def live() -> dict[str, str]:
 
 @router.get("/health/ready")
 async def ready(session: Annotated[AsyncSession, Depends(get_session)]) -> dict[str, str]:
-    """Report readiness only when the durable ACK database is reachable."""
-    await session.execute(text("SELECT 1"))
+    """Report readiness only when the migrated durable inbox schema is reachable."""
+    # A live process against an unmigrated database must not receive proxy traffic.
+    # The projection avoids reading event payloads; an empty inbox still returns ready.
+    await session.execute(text("SELECT 1 FROM inbox_events LIMIT 1"))
     return {"status": "ready"}
 
 

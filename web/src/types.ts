@@ -24,6 +24,9 @@ export interface WebSession {
   scope: QueryScope;
   role: "viewer" | "investigator" | "admin";
   expiresAtMs: number;
+  // Runtime APM_ENVIRONMENT from the server. Optional for older backends; browsers
+  // must not guess a deployment label when it is absent.
+  environment?: string;
 }
 
 export interface MetricResult {

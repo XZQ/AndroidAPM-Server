@@ -54,3 +54,23 @@ def test_web_assets_are_built_once_and_production_tls_proxy_is_explicit() -> Non
     assert production["services"]["caddy"]["ports"] == ["80:80", "443:443", "443:443/udp"]
     assert "reverse_proxy gateway:8080" in caddyfile
     assert "Strict-Transport-Security" in caddyfile
+
+
+def test_public_proxy_hardens_all_responses_and_hides_upstream_server_header() -> None:
+    caddyfile = (ROOT / "deploy" / "caddy" / "Caddyfile").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    main = (ROOT / "src" / "androidapm_server" / "main.py").read_text(encoding="utf-8")
+
+    # API and health responses must also receive baseline security headers.
+    assert 'X-Content-Type-Options "nosniff"' in caddyfile
+    assert 'X-Frame-Options "DENY"' in caddyfile
+    assert 'Referrer-Policy "no-referrer"' in caddyfile
+    assert "respond @private_paths 404" in caddyfile
+    assert "/openapi.json" in caddyfile
+    assert "health_uri /health/ready" in caddyfile
+
+    # The upstream must stop emitting its own Server header; container liveness stays
+    # process-level while the reverse proxy checks the database-backed readiness probe.
+    assert "--no-server-header" in dockerfile
+    assert "server_header=False" in main
+    assert "health/live" in dockerfile

@@ -1,0 +1,27 @@
+name: TLS expiry monitor
+
+# The cloud deployment uses short-lived certificates with HTTP-01 unavailable,
+# so an external daily probe is the earliest warning that renewal has stopped.
+# Set the repository variable APM_PUBLIC_HOST to the public hostname/IP to enable.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: ${{ vars.APM_PUBLIC_HOST != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check public certificate
+        env:
+          APM_HOST: ${{ vars.APM_PUBLIC_HOST }}
+        run: python scripts/check_tls_expiry.py --host "$APM_HOST" --min-days 3

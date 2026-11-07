@@ -35,6 +35,9 @@ jobs:
       APM_ENVIRONMENT: test
       APM_DATABASE_URL: postgresql+asyncpg://androidapm:test-only-password@localhost:5432/androidapm_test
       APM_TEST_POSTGRES_URL: postgresql+asyncpg://androidapm:test-only-password@localhost:5432/androidapm_test
+      # Optional repository variable: point it at an Android NDK toolchain to enable
+      # the real two-ELF LLVM symbolization regression instead of an explicit skip.
+      APM_TEST_NDK_BIN: ${{ vars.APM_TEST_NDK_BIN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -62,6 +65,7 @@ jobs:
           uv run ruff check .
           uv run mypy src
           uv run python scripts/verify_docs.py
+          uv run python scripts/check_secrets.py
       - name: Migrate PostgreSQL
         run: |
           uv run alembic upgrade head
@@ -72,6 +76,10 @@ jobs:
           uv run pytest --cov=androidapm_server --cov-report=term --cov-fail-under=70
           uv run pytest integration_tests
       - name: Validate container assets
+        env:
+          APM_DOMAIN: apm.example.test
         run: |
           docker compose config
+          # Also resolve the production overlay so TLS/cookie settings cannot drift alone.
+          docker compose -f compose.yaml -f compose.production.yaml config
           docker build --tag androidapm-server:${{ github.sha }} .

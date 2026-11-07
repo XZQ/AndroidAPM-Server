@@ -22,6 +22,9 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# WorkBuddy local project data (never a temporary cache)
+.workbuddy/
+
 # Runtime
 *.log
 dist/

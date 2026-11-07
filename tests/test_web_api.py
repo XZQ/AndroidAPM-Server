@@ -95,6 +95,8 @@ async def test_query_key_exchanges_for_http_only_session_without_secret_leak(
         "environment": "production",
     }
     assert response.json()["role"] == "viewer"
+    # Runtime deployment label is distinct from the fixed Query Key data scope.
+    assert response.json()["environment"] == "test"
     assert credentials["viewer"] not in response.text
     cookies = response.headers.get_list("set-cookie")
     session_cookie = next(value for value in cookies if value.startswith(WEB_SESSION_COOKIE))

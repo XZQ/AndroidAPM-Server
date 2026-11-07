@@ -22,7 +22,7 @@ beforeEach(() => {
   document.cookie = "androidapm_csrf=csrf-test; path=/";
 });
 
-function setup(page: string, role = "admin", extra?: (path: string, init?: RequestInit) => Promise<Response> | undefined) {
+function setup(page: string, role = "admin", extra?: (path: string, init?: RequestInit) => Promise<Response> | undefined, runtimeEnvironment?: string) {
   window.history.pushState({}, "", `/apps/com.example/${page}`);
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -33,7 +33,7 @@ function setup(page: string, role = "admin", extra?: (path: string, init?: Reque
       posts.push({ path, body, csrf: new Headers(init.headers).get("X-Apm-Csrf-Token") });
       return json(path === "/v1/manage/keys" ? { id: "new-key", secret: "apmq1_ephemeral-secret" } : path === "/v1/manage/configs" ? { revision: 2 } : {});
     }
-    if (path === "/v1/web/session") return json({ requestId: "session", scope, role, expiresAtMs: Date.now() + 60000 });
+    if (path === "/v1/web/session") return json({ requestId: "session", scope, role, expiresAtMs: Date.now() + 60000, ...(runtimeEnvironment === undefined ? {} : { environment: runtimeEnvironment }) });
     if (path.startsWith("/v1/query/performance?")) return json(performance);
     if (path === "/v1/alerts") return json(alerts);
     if (path === "/v1/manage/settings") return json(settings);
@@ -47,6 +47,19 @@ function setup(page: string, role = "admin", extra?: (path: string, init?: Reque
   });
   return render(<App />);
 }
+
+it("labels a real deployment instead of showing the synthetic-preview warning", async () => {
+  setup("performance", "viewer", undefined, "production");
+  await screen.findByRole("heading", { name: "性能分析" });
+  expect(screen.getByText(/已连接 production 服务/)).toBeInTheDocument();
+  expect(screen.queryByText(/synthetic preview 不能代表生产部署/)).not.toBeInTheDocument();
+});
+
+it("keeps the synthetic-preview warning when the runtime is local", async () => {
+  setup("performance", "viewer", undefined, "local");
+  await screen.findByRole("heading", { name: "性能分析" });
+  expect(await screen.findByText(/synthetic preview 不能代表生产部署/)).toBeInTheDocument();
+});
 
 it("renders performance observations and distinguishes unavailable from observed zero", async () => {
   setup("performance", "viewer");

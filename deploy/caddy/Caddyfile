@@ -1,15 +1,24 @@
 {$APM_DOMAIN} {
-    @private_metrics path /metrics /metrics/*
-    respond @private_metrics 404
+    # Keep process metrics and interactive API docs off the public surface even if the
+    # application is accidentally started with a non-production environment label.
+    @private_paths path /metrics /metrics/* /docs /docs/* /openapi.json /redoc /redoc/*
+    respond @private_paths 404
     encode zstd gzip
 
+    # Apply baseline security headers to every response, including JSON API and health probes.
+    # The SPA additionally sets a stricter CSP itself; Caddy must not remove it.
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
         -Server
     }
 
     reverse_proxy gateway:8080 {
-        health_uri /health/live
+        # Container liveness only proves the process is alive; proxy health must also
+        # prove the durable inbox schema is reachable before routing traffic.
+        health_uri /health/ready
         health_interval 15s
         health_timeout 3s
     }

@@ -1,6 +1,27 @@
 # AndroidAPM-Server 项目交接
 
-> 当前本地产品基线：2026-11-02，服务端唯一分支 `main`。本文区分“本机已验证”和“需要外部环境验证”，历史条目保留当时事实。
+> 当前基线：2026-11-07，服务端唯一分支 `main`。本文区分“本机已验证”“公网只读已验证”和“需要外部环境验证”，历史条目保留当时事实。
+
+## 2026-11-07 云端事实纠偏与缺口收尾
+
+本轮先复核运行现实，再按证据逐项修复可在本机闭环的缺口。
+
+**运行事实**：服务已在首尔轻量应用服务器以 HTTPS 对外运行；2026-11-07 直连复核 `/health/live`、`/health/ready` 均 200，`GET /` 200 且带完整页面安全头，`/docs`、`/openapi.json`、`/metrics` 404，未鉴权 `/v1/alerts` 401，仅 22/443 可达；Let's Encrypt 短期证书 `notAfter 2026-11-12 22:41:30 UTC`。运行时 `APM_ENVIRONMENT` 与 Query Key 的数据 `environment` scope 是两个概念：`/docs` 404 说明运行时为 `production`，历史记录中的 `staging` 指凭据 scope。公网可达不代表 SigNoz、通知、备份、SSO、真机或容量验收通过。详见 `13-云端运行环境.md`。
+
+**此前文档缺陷**：`AGENTS.md`、`README.md`、`docs/08`、`云端待建设清单.md` 及本文最新条目仍停留在"未部署 / 本机无 Docker"的 2026-11-02 视角；`README` 内 v3/70 与 v4/243 口径冲突，`AGENTS.md` / `云端待建设清单.md` 内 "durable V5 已完成" 与 "SDK 仍为 V4" 并存。
+
+**本轮变更**：
+
+- 新增 `docs/13-云端运行环境.md`（脱敏），记录公网事实、部署形态差异、运行时开关、P0 服务器侧待办、只读配置回收清单与历史误判更正；同步修正 `AGENTS.md` 阅读顺序与基线、`README.md`、`docs/08-部署与运维.md`、`云端待建设清单.md` 的过期口径。
+- 反代与响应头：`deploy/caddy/Caddyfile` 为所有响应补 HSTS / nosniff / X-Frame-Options / Referrer-Policy，统一屏蔽 `/docs`、`/openapi.json`、`/redoc`；`Dockerfile` 与 `main.py` 禁用 uvicorn `Server` 头；`reverse_proxy` 主动健康检查改用 `/health/ready`。
+- `/health/ready` 从仅 `SELECT 1` 增强为同时确认 inbox schema 已迁移，避免"进程活着但表不存在"被判为就绪。
+- Web 会话响应新增运行时 `environment` 字段，控制台页脚按环境显示证据提示；`local` 仍明确标注合成预览，不再在真实部署上无条件显示"synthetic preview 不能代表生产部署"。
+- 新增 `scripts/check_production_config.py`（部署前置配置强校验，不改动运行时启动行为）、`scripts/check_tls_expiry.py`（证书到期巡检）、`scripts/check_secrets.py`（被跟踪文件明文凭据扫描）；`scripts/verify_docs.py` 增加文档清单、Alembic head 与版本号一致性校验；`.github/workflows/tls-monitor.yml` 在配置仓库变量 `APM_PUBLIC_HOST` 后每日巡检短期证书。
+- CI 增加 production overlay `compose config`、secret scan 与可选 NDK 回归变量；`tests/test_deploy_assets.py` 及新增回归覆盖上述门禁。`docs/08` 补备份/PITR 与季度恢复演练清单，明确资源限制不写死是等待回收云端 override。
+
+**本轮验证（本机，2026-11-07）**：Ruff、mypy（63 source files）、`pytest` **537 passed / 1 skipped**（skip 为未配置 `APM_TEST_NDK_BIN`）、15 份必需文档与 Alembic head / 四处版本号一致性、被跟踪文件明文凭据扫描、`git diff --check` 全部通过；前端 ESLint、TypeScript、**8 suites / 27 Vitest tests**、生产 build（JS 319.02 kB / gzip 100.26 kB）通过。新增回归覆盖会话 `environment` 字段、ready 的 schema 探针、反代/容器资产、部署配置与证书/凭据脚本，以及控制台页脚 local / 远端两种分支。本机没有 Docker CLI，因此 `docker compose -f compose.yaml -f compose.production.yaml config` 与镜像 build 由 CI 验证、本轮未执行；`integration_tests/` 仍需 `APM_TEST_POSTGRES_URL`，本地默认 testpaths 不含它。浏览器实机冒烟沿用 2026-11-02 的历史证据，本轮未重跑。
+
+**仍需服务器侧完成（本机无法闭环）**：回收实际 compose / Caddyfile / 环境变量并脱敏纳管；处理 31 个待处理主机安全事件；为约 6 天有效期的证书设置 `APM_PUBLIC_HOST` 仓库变量以启用到期告警，并考虑绑域名；清理空跑的 `androidapm-server-gateway-1`；确认外部 OTLP 接收端与 dead letter、磁盘水位；执行备份/PITR 恢复演练；把回收后的反代配置与本轮 Caddyfile 加固同步到线上。这些都写在 `docs/13` 第 4、5 节，不能标记完成。
 
 ## 2026-11-02 本地差异修复与交付验证
 
