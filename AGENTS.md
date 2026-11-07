@@ -71,7 +71,7 @@ This is the repository-local handoff entry for AndroidAPM-Server. Source code, m
 - V2 resource/build values remain upload-batch declarations and must stay `BATCH_DECLARED`; V3 occurrence values are frozen into each durable Android event and stored as `OCCURRENCE_BOUND`.
 - Known V2/V3 installation and optional V3 session plaintext must never enter payloads, logs, OTLP, queries or audits. Separate HMAC domains retain tenant scope and original key versions for replay; absent new optional keys never change legacy V3 payload hashes.
 - Query credentials own immutable tenant/app/environment scope. Request parameters/cursors never widen scope; viewer is L0-only, investigator/admin may read L1/L2 and record decisions, and only independently provisioned admin may manage keys/configs/alerts. Existing keys never acquire admin rights automatically.
-- Browsers never persist raw `apmq1` credentials. Production Web sessions require HTTPS Secure cookies, a dedicated signing key, database revocation checks, and CSRF on ambient-cookie writes.
+- Browsers never persist raw `apmq1` credentials. Production Web sessions require HTTPS Secure cookies, a dedicated signing key, database revocation checks, and CSRF on ambient-cookie writes. The `environment` returned by `/v1/web/session` is a non-secret runtime deployment label used only for UI evidence warnings; it is never an authorization input and is distinct from the fixed Query Key data scope.
 
 ## Engineering rules
 
@@ -99,10 +99,12 @@ This is the repository-local handoff entry for AndroidAPM-Server. Source code, m
 4. `uv run mypy src`
 5. `uv run pytest`
 6. `uv run python scripts/verify_docs.py`
-7. `pnpm --dir web run lint`
-8. `pnpm --dir web run typecheck`
-9. `pnpm --dir web run test`
-10. `pnpm --dir web run build`
-11. `git diff --check`
-12. Container build and Compose smoke test when Docker is available
-13. After push, exact equality among `HEAD`, the pushed remote branch, and `git ls-remote`
+7. `uv run python scripts/check_secrets.py`
+8. `pnpm --dir web run lint`
+9. `pnpm --dir web run typecheck`
+10. `pnpm --dir web run test`
+11. `pnpm --dir web run build`
+12. `git diff --check`
+13. Container build, `docker compose config` and production-overlay `config` when Docker is available
+14. Before an external deployment: `python scripts/check_production_config.py --env-file .env.production` (never prints values)
+15. After push, exact equality among `HEAD`, the pushed remote branch, and `git ls-remote`

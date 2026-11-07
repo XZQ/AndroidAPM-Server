@@ -4,7 +4,7 @@
 
 2026-10-14 本地统计扩展：总览/发布新增 Native、Tombstone 与标准运行会话率；Issue 可看设备/OS 及缺失覆盖；性能补齐 SDK 已采集事件；`/apps/:appId/traces` 与 `/traces/:traceId` 提供 investigator/admin 手动 Trace 列表、真实时间线与层级。旧数据保持缺失原因，所有深链使用同源 session/固定 scope。见 [统计契约](12-统计契约与口径.md) 与 [ADR 0011](adr/0011-运行会话统计与多信号导出.md)。
 
-> 实现基线：2026-10-13。性能、告警、设置和 Sample 本地接通详见 [本地产品功能](11-本地产品功能.md)。PostgreSQL/TLS/SigNoz 与真实通知仍需环境准备后现场验证，下文标明日期的浏览器记录属于历史证据。
+> 实现基线：2026-10-13。性能、告警、设置和 Sample 本地接通详见 [本地产品功能](11-本地产品功能.md)。PostgreSQL/TLS/SigNoz 与真实通知仍需环境准备后现场验证，下文标明日期的浏览器记录属于历史证据。2026-11-07 更正：云端已上线 HTTPS 服务，但公网可达不等于上述现场验收通过，运行事实与待办见 [云端运行环境](13-云端运行环境.md)。
 
 ## 当前结论
 
@@ -37,7 +37,7 @@ desktop browser
 - Issue 发生趋势与版本/场景分布来自 durable inbox；设备/Android 版本缺标准协议字段时显示 `UNKNOWN_COVERAGE`。
 - 性能为精确契约的分位数/覆盖/趋势/版本比较；告警有持久化规则、实例和通知 outbox；设置有 admin 管理 API 与审计。缺观测或渠道时明确显示无数据/未配置。
 
-尚不属于当前本地网页完成项：SSO/账号密码体系、跨 tenant 管理、标准 session/device/OS/Trace 契约、真实云部署和自动发布操作。制品上传使用 CI API，网页提供元数据和任务状态。
+尚不属于当前本地网页完成项：SSO/账号密码体系、跨 tenant 管理、标准 session/device/OS/Trace 契约，以及自动发布与生产现场验收。2026-11-07 更正：云端已有一条运行中的 HTTPS 部署（见 [云端运行环境](13-云端运行环境.md)），但部署配置未回收、现场验收未通过，不能再把「真实云部署」整体列为未完成。制品上传使用 CI API，网页提供元数据和任务状态。
 
 ## 同源认证边界
 
@@ -45,7 +45,7 @@ desktop browser
 
 1. 用户通过 HTTPS 或 loopback 向 `POST /v1/web/session` 提交一次 `apmq1`。
 2. 服务端完成 Argon2id 校验，从数据库取得固定 tenant/app/environment/role。
-3. 服务端返回不含 Query secret 的短时签名 Cookie；Cookie 为 host-only、`HttpOnly`、`SameSite=Strict`，生产必须设置 `Secure`。
+3. 服务端返回不含 Query secret 的短时签名 Cookie；Cookie 为 host-only、`HttpOnly`、`SameSite=Strict`，生产必须设置 `Secure`。2026-11-07 起响应另含非敏感运行时 `environment` 标签（`APM_ENVIRONMENT`），仅供控制台区分 local 合成预览与真实部署；它不是授权输入，也不等于 Query Key 固定的数据 `environment`。
 4. 签名 payload 只保存 Query key ID、签发/过期时间和 CSRF token digest，不保存 tenant 数据或长期 secret。
 5. 每次请求按 key ID 回查 Query Key 与 tenant 状态；撤销、禁用或到期立即让现有会话失效。
 6. Cookie 驱动的 POST/DELETE 还必须同时提交与签名会话绑定的 CSRF header；显式 Bearer API 客户端不使用 ambient cookie，保持原接口兼容。
@@ -194,7 +194,9 @@ Vite 只把 `/v1` 和 `/health` 代理到 `127.0.0.1:8080`。任何环境都不�
 
 4 vCPU / 8 GiB 可以仅跑 Gateway/Web/worker + 外部 PostgreSQL/SigNoz，但不建议把完整 SigNoz/ClickHouse 也挤在该规格上。真正 production 不应把“单台机器跑通”当 HA：至少分离托管 PostgreSQL，评估 SigNoz/ClickHouse 数据盘、第二 Gateway 故障域、对象存储、监控和备份。
 
-## 服务器到手后的现场顺序
+## 服务器到手后的现场顺序（2026-11-07 状态校正）
+
+> 状态：服务器已到手且云端已有一条运行中的 HTTPS 部署，但**并非按本节 compose 清单部署**（对外容器带 `public-trial` 前缀、存在空跑 gateway、反代配置与仓库不一致）。本节命令保留为「从干净服务器重建」的标准顺序，不能直接套用到现有实例；先按 [云端运行环境](13-云端运行环境.md) 第 5 节回收实际配置。域名仍未设置，短期证书续期依赖 443 常开。
 
 1. 建立非 root 运维账号、SSH key、时钟同步、自动安全更新和最小安全组。
 2. 安装 Docker Engine/Compose，配置独立数据盘和日志轮转。
@@ -210,6 +212,8 @@ Vite 只把 `/v1` 和 `/health` 代理到 `127.0.0.1:8080`。任何环境都不�
 ```bash
 cp .env.production.example .env.production
 # 编辑域名、数据库密码、OTLP endpoint 和三组互不相同的 Base64/HMAC secret
+# 部署前置强校验：只输出键名与失败原因，不打印任何值
+python scripts/check_production_config.py --env-file .env.production
 
 docker compose --env-file .env.production \
   -f compose.yaml -f compose.production.yaml config
@@ -222,9 +226,9 @@ docker compose --env-file .env.production \
   -f compose.yaml -f compose.production.yaml ps
 ```
 
-只有固定 R8/LLVM 镜像和真实制品准备后才附加 `--profile symbolization`。基础 `gateway:8080` 默认只绑定宿主 `127.0.0.1`，公网由 Caddy 暴露 80/443；安全组仍必须阻止数据库、OTLP 和 SigNoz 内部端口。
+只有固定 R8/LLVM 镜像和真实制品准备后才附加 `--profile symbolization`。基础 `gateway:8080` 默认只绑定宿主 `127.0.0.1`，公网由 Caddy 暴露 80/443；安全组仍必须阻止数据库、OTLP 和 SigNoz 内部端口。2026-11-07 起 `deploy/caddy/Caddyfile` 为所有响应补 HSTS / nosniff / frame-deny / no-referrer，并屏蔽公开 `/docs`、`/openapi.json`、`/redoc`；`reverse_proxy` 主动健康检查使用确认 inbox schema 的 `/health/ready`。线上仍是旧配置，需重新部署才生效。
 
-部署前仍需用户提供：云厂商/地域、服务器公网地址、域名及 DNS 控制权、是否使用托管 PostgreSQL、数据保留天数和通知渠道。除此之外，本地代码、网页、镜像构建链和联调入口已经准备好。
+2026-11-07 更新：云厂商/地域与服务器公网地址已确定（首尔轻量应用服务器，具体地址只保存在被忽略的 `.local/SERVER-CONFIG.md`），但**域名及 DNS 控制权仍未设置**，是否使用托管 PostgreSQL、数据保留天数和通知渠道仍待确认。当前线上部署形态未纳管，重建或升级前必须先回收配置；本机无 Docker，本节命令未在本轮实际执行。除此之外，本地代码、网页、镜像构建链和联调入口已经准备好。
 # 2026-09-07 页面证据一致性
 
 路由、会话 scope 或筛选条件变化时重新建立页面状态，立即移除旧 raw/聚合/决策表单。所有读取使用请求代次拒绝过期响应；同页重试先清空旧证据。总览依赖的任一请求失败都展示错误，避免拼接不同时刻的质量与发布结论。发布决策仅在当前证据加载完成时可提交，失败保留理由和确认状态。回归覆盖刷新失败、响应乱序和跨事件迟到 raw；本地前端四门禁通过（12 tests）。

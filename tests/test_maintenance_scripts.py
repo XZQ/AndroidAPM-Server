@@ -55,6 +55,20 @@ def test_example_env_file_is_rejected_without_printing_values() -> None:
     assert all(KEY_B64 not in failure for failure in failures)
 
 
+def test_compose_injected_database_url_is_not_required_in_env_file() -> None:
+    config = load("check_production_config")
+    values = valid_configuration()
+    del values["APM_DATABASE_URL"]
+    assert config.validate(values) == []
+
+
+def test_explicit_sqlite_database_url_override_is_rejected() -> None:
+    config = load("check_production_config")
+    values = valid_configuration()
+    values["APM_DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+    assert any("APM_DATABASE_URL" in failure for failure in config.validate(values))
+
+
 def test_weak_keys_and_insecure_cookies_are_rejected() -> None:
     config = load("check_production_config")
     values = valid_configuration()

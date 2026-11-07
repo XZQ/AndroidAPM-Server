@@ -113,9 +113,13 @@ def _validate_infrastructure(values: dict[str, str], failures: list[str]) -> Non
     password = values.get("POSTGRES_PASSWORD", "")
     if is_placeholder(password) or len(password) < MIN_DATABASE_PASSWORD_BYTES:
         failures.append("POSTGRES_PASSWORD: missing, example-only, or shorter than 16 bytes")
+    # compose.yaml injects APM_DATABASE_URL from POSTGRES_PASSWORD, so a valid
+    # deployment env file normally omits it. Validate only an explicit override.
     database_url = values.get("APM_DATABASE_URL", "")
-    if not database_url.startswith("postgresql") or is_placeholder(database_url):
-        failures.append("APM_DATABASE_URL: must point at PostgreSQL, not SQLite or a default")
+    if database_url and (
+        not database_url.startswith("postgresql") or is_placeholder(database_url)
+    ):
+        failures.append("APM_DATABASE_URL: override must point at PostgreSQL, not SQLite")
     domain = values.get("APM_DOMAIN", "")
     if is_placeholder(domain) or "." not in domain:
         failures.append("APM_DOMAIN: missing or example-only")
