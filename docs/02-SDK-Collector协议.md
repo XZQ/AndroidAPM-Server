@@ -52,6 +52,8 @@ ts=...|eventId=...|module=...|name=...|kind=...|severity=...|priority=...|proces
 
 SDK 会把 `|` 替换为 `/`、`,` 替换为 `;`、换行替换为空格。嵌套 map 的 key/value 仍以 `=` 连接，因此原格式无法无歧义恢复包含 `=` 的内容。v1 parser 按第一个 `=` 分割每段、map 项按第一个 `=` 分割，并保留兼容后的值；生产优先使用 Protobuf。未来 Line v2 必须采用明确 envelope（JSON/Protobuf），不能静默改变 v1 解释。
 
+事件分隔符只有 `\n`（兼容 CRLF 与单个结尾换行）。值内部的 CR、VT、FF、NEL 或 Unicode 行分隔符不会被当作事件边界，避免异常消息中的合法字符把整批变成不可重试的 422。极端 int64 时间戳（超出可表示日期范围）按非重试 422 拒绝，而不是可重试 5xx，防止毒丸批次无限重放。
+
 必填段：`ts,eventId,module,name,kind,severity,priority,process,thread`。`scene,foreground,fields,context,extras` 是可选段；map 为空时当前 SDK 不输出该段。枚举大小写敏感。未知顶层段进入 raw 扩展区但不索引。
 
 ## Protobuf 兼容格式

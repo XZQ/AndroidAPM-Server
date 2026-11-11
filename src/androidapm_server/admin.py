@@ -156,6 +156,9 @@ async def create_ci_key(arguments: argparse.Namespace) -> str:
                 result="success",
                 details_json={
                     "app_id": arguments.app_id,
+                    # CI keys are app-scoped credentials without an environment; the
+                    # explicit null keeps them visible to every scoped app admin.
+                    "environment": None,
                     "scopes": [CI_SCOPE_ARTIFACT_WRITE],
                     "expires_at": expires_at.isoformat() if expires_at else None,
                 },
@@ -170,7 +173,7 @@ async def create_query_key(arguments: argparse.Namespace) -> str:
     if arguments.expires_days is not None and arguments.expires_days <= 0:
         raise ValueError("--expires-days must be positive")
     if arguments.role not in QUERY_ROLES:
-        raise ValueError("--role must be viewer or investigator")
+        raise ValueError("--role must be viewer, investigator, or admin")
     key_id, plaintext, key_hash = generate_query_key()
     expires_at = (
         datetime.now(UTC) + timedelta(days=arguments.expires_days)
@@ -276,6 +279,8 @@ async def publish_config(arguments: argparse.Namespace) -> int:
                 object_id=f"{arguments.app_id}:{arguments.environment}:{revision}",
                 result="success",
                 details_json={
+                    "app_id": arguments.app_id,
+                    "environment": arguments.environment,
                     "revision": revision,
                     "rollout_basis_points": arguments.rollout_basis_points,
                     "expires_at": expires_at.isoformat(),

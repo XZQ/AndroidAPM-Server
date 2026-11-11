@@ -22,7 +22,7 @@ export function LoginPage({ onAuthenticated, initialMessage = null }: LoginPageP
       setQueryKey("");
       onAuthenticated(session);
     } catch (caught) {
-      setError(caught instanceof ApiFailure ? caught.message : "无法连接本地 AndroidAPM 服务端");
+      setError(caught instanceof ApiFailure ? caught.message : "无法连接 AndroidAPM 服务端，请检查网络后重试");
     } finally {
       setSubmitting(false);
     }

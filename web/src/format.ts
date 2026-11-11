@@ -63,7 +63,7 @@ export function formatPercent(value: number | null): string {
 }
 
 export function formatDateTime(value: number | string): string {
-  const date = typeof value === "number" ? new Date(value) : new Date(value);
+  const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
   return new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",

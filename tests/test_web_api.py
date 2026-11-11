@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
+import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -10,14 +13,24 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from starlette.requests import Request
 
 from androidapm_server.config import Settings, get_settings
 from androidapm_server.db.base import Base
 from androidapm_server.db.models import AuditLog, QueryKey, Tenant
 from androidapm_server.db.session import get_session
+from androidapm_server.errors import ApiError
 from androidapm_server.main import create_app
 from androidapm_server.query_auth import generate_query_key
-from androidapm_server.web_auth import WEB_CSRF_COOKIE, WEB_CSRF_HEADER, WEB_SESSION_COOKIE
+from androidapm_server.web_auth import (
+    WEB_CSRF_COOKIE,
+    WEB_CSRF_HEADER,
+    WEB_SESSION_COOKIE,
+    WEB_SESSION_VERSION,
+    WebSessionClaims,
+    _verify_csrf,
+    decode_web_session,
+)
 
 TEST_WEB_KEY_B64 = base64.b64encode(b"web-session-test-key-material-32-bytes").decode()
 TEST_CURSOR_KEY_B64 = base64.b64encode(b"query-cursor-test-key-material-32-bytes").decode()
@@ -227,6 +240,146 @@ def test_production_settings_require_secure_cookie_and_strong_session_key() -> N
             web_session_cookie_secure=True,
             web_session_hmac_key_b64=base64.b64encode(b"short").decode(),
         )
+
+
+def _session_settings() -> Settings:
+    return Settings(_env_file=None, web_session_hmac_key_b64=TEST_WEB_KEY_B64)
+
+
+def _signed_token(claims: dict[str, object], key_b64: str = TEST_WEB_KEY_B64) -> str:
+    payload = json.dumps(claims, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    signature = hmac.new(base64.b64decode(key_b64), payload, hashlib.sha256).digest()
+
+    def b64(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+    return f"{b64(payload)}.{b64(signature)}"
+
+
+def _valid_claims() -> dict[str, object]:
+    now = int(datetime.now(UTC).timestamp())
+    return {
+        "v": WEB_SESSION_VERSION,
+        "kid": "0123456789abcdef01",
+        "iat": now,
+        "exp": now + 3_600,
+        "csrf": hashlib.sha256(b"csrf-token").hexdigest(),
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param(lambda claims: claims.update(v=WEB_SESSION_VERSION + 1), id="version"),
+        pytest.param(lambda claims: claims.update(kid="not-hex"), id="key-id"),
+        pytest.param(lambda claims: claims.update(iat=claims["iat"] + 120), id="future-iat"),
+        pytest.param(lambda claims: claims.update(exp=claims["iat"] - 1), id="expired"),
+        pytest.param(lambda claims: claims.update(exp=claims["iat"] + 7_200), id="over-ttl"),
+        pytest.param(lambda claims: claims.pop("csrf"), id="missing-claim"),
+        pytest.param(lambda claims: claims.update(csrf="z" * 64), id="non-hex-csrf"),
+    ],
+)
+def test_decode_web_session_rejects_invalid_claims(mutation: object) -> None:
+    claims = _valid_claims()
+    mutation(claims)  # type: ignore[operator]
+    with pytest.raises(ApiError) as caught:
+        decode_web_session(_signed_token(claims), _session_settings())
+    assert caught.value.status_code == 401
+
+
+def test_decode_web_session_rejects_tampered_signature_and_encoding() -> None:
+    token = _signed_token(_valid_claims())
+    payload, signature = token.split(".")
+    flipped = signature[:-1] + ("A" if signature[-1] != "A" else "B")
+    for candidate in (
+        f"{payload}.{flipped}",
+        f"{payload}={signature}",
+        f"{payload}.{signature}!",
+        f"{payload}",
+    ):
+        with pytest.raises(ApiError) as caught:
+            decode_web_session(candidate, _session_settings())
+        assert caught.value.status_code == 401
+    assert decode_web_session(token, _session_settings()).key_id == "0123456789abcdef01"
+
+
+@pytest.mark.parametrize(
+    ("cookie_bytes", "header_bytes"),
+    [(b"abc\xff", b"abc\xff"), (b"abc\xff", b"abc"), (b"abc", b"abc\xff")],
+)
+def test_non_ascii_csrf_values_fail_closed_as_403(cookie_bytes: bytes, header_bytes: bytes) -> None:
+    """Corrupted latin-1 cookie/header bytes must not crash compare_digest into a 500."""
+    claims = WebSessionClaims(
+        key_id="0123456789abcdef01",
+        issued_at=int(datetime.now(UTC).timestamp()),
+        expires_at=int(datetime.now(UTC).timestamp()) + 3_600,
+        csrf_sha256=hashlib.sha256(b"abc").hexdigest(),
+    )
+    scope = {
+        "type": "http",
+        "headers": [
+            (b"cookie", WEB_CSRF_COOKIE.encode() + b"=" + cookie_bytes),
+            (WEB_CSRF_HEADER.encode(), header_bytes),
+        ],
+    }
+    with pytest.raises(ApiError) as caught:
+        _verify_csrf(Request(scope), claims)
+    assert caught.value.status_code == 403
+    assert caught.value.code == "csrf_validation_failed"
+
+
+@pytest.mark.asyncio
+async def test_csrf_token_is_bound_to_its_own_session(
+    web_api: tuple[AsyncClient, async_sessionmaker[AsyncSession], dict[str, str], Settings],
+) -> None:
+    client, _, credentials, _ = web_api
+    first = await client.post(
+        "/v1/web/session", json={"queryKey": credentials["investigator"]}
+    )
+    assert first.status_code == 200
+    foreign_csrf = client.cookies.get(WEB_CSRF_COOKIE)
+    assert foreign_csrf is not None
+    second = await client.post(
+        "/v1/web/session", json={"queryKey": credentials["investigator"]}
+    )
+    assert second.status_code == 200
+
+    stolen = await client.post(
+        "/v1/query/release-decisions",
+        headers={WEB_CSRF_HEADER: foreign_csrf},
+        json=_decision_body(),
+    )
+    assert stolen.status_code == 403
+    assert stolen.json()["code"] == "csrf_validation_failed"
+
+    own_csrf = client.cookies.get(WEB_CSRF_COOKIE)
+    assert own_csrf is not None
+    accepted = await client.post(
+        "/v1/query/release-decisions",
+        headers={WEB_CSRF_HEADER: own_csrf},
+        json=_decision_body(),
+    )
+    assert accepted.status_code == 201, accepted.text
+
+
+@pytest.mark.asyncio
+async def test_expired_query_key_invalidates_an_existing_cookie_session(
+    web_api: tuple[AsyncClient, async_sessionmaker[AsyncSession], dict[str, str], Settings],
+) -> None:
+    client, factory, credentials, _ = web_api
+    login = await client.post("/v1/web/session", json={"queryKey": credentials["viewer"]})
+    assert login.status_code == 200
+
+    key_id = credentials["viewer"].split("_", maxsplit=2)[1]
+    async with factory() as session:
+        query_key = await session.get(QueryKey, key_id)
+        assert query_key is not None
+        query_key.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await session.commit()
+
+    restored = await client.get("/v1/web/session")
+    assert restored.status_code == 401
+    assert restored.json()["code"] == "invalid_credential"
 
 
 def _decision_body() -> dict[str, object]:

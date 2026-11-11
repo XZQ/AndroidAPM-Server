@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import Field
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from androidapm_server.alerts import (
@@ -798,7 +798,12 @@ async def list_audit(
                 .where(
                     AuditLog.tenant_id == principal.tenant_id,
                     AuditLog.details_json["app_id"].as_string() == principal.app_id,
-                    AuditLog.details_json["environment"].as_string() == principal.environment,
+                    or_(
+                        AuditLog.details_json["environment"].as_string() == principal.environment,
+                        # App-scoped credential actions (CI keys) carry no environment;
+                        # they belong to every scoped admin of the same app.
+                        AuditLog.details_json["environment"].as_string().is_(None),
+                    ),
                 )
                 .order_by(AuditLog.id.desc())
                 .limit(MANAGEMENT_LIST_LIMIT),

@@ -122,3 +122,41 @@ async def test_unexpected_transport_failure_exhausts_retry_budget_without_loggin
         rows = list((await session.scalars(select(InboxEvent))).all())
         assert all(r.status == "dead_letter" and r.attempt_count == 2 for r in rows)
         assert all(r.last_error_message == "OTLP transport failed" for r in rows)
+
+
+async def test_reclaim_after_final_attempt_crash_dead_letters_without_resending(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A crash after the last send must not grant one more OTLP export on re-claim."""
+    async with factory() as session:
+        await session.execute(
+            update(InboxEvent).values(
+                status="processing",
+                lease_owner="crashed-owner",
+                lease_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+                attempt_count=2,
+                export_signal_states_json={"logs": "pending"},
+            )
+        )
+        await session.commit()
+
+    requests: list[bytes] = []
+
+    async def receive(request: httpx.Request) -> httpx.Response:
+        requests.append(request.content)
+        return httpx.Response(200)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(receive)) as http:
+        client = OtlpLogsClient("http://test/v1/logs", "{}", 1, http)
+        assert await worker.export_once(client, "owner") == 2
+    assert requests == []
+    async with factory() as session:
+        rows = list((await session.scalars(select(InboxEvent))).all())
+        assert all(r.status == "dead_letter" for r in rows)
+        assert all(r.last_error_code == "export_attempts_exhausted" for r in rows)
+
+
+@pytest.mark.parametrize("timeout", [60, 55])
+def test_otlp_timeout_cannot_outlive_worker_lease(timeout: int) -> None:
+    with pytest.raises(ValueError, match="OTLP timeout must be shorter"):
+        Settings(_env_file=None, otlp_timeout_seconds=timeout, worker_lease_seconds=60)

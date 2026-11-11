@@ -315,3 +315,54 @@ async def test_installation_in_required_identity_rejects_whole_batch(session: As
     with pytest.raises(ApiError, match="Required identity"):
         await insert_batch(session, metadata(), [event("healthy"), item], KEYS_V1)
     assert await session.scalar(select(func.count()).select_from(InboxEvent)) == 0
+
+
+@pytest.mark.asyncio
+async def test_short_installation_id_preserves_structural_evidence(session: AsyncSession) -> None:
+    """A short identifier must not substring-match structural schema keys like ``occurrence``."""
+    base = occurrence_event("e-short", "occ")
+    assert base.occurrence is not None
+    item = base.model_copy(
+        update={
+            "fields": {"occ-key": "secret-key", "safe": "value", "leak": "x/occ/y"},
+            "occurrence": base.occurrence.model_copy(
+                update={
+                    "device_model": "Example/Model",
+                    "os_version": "14/API 34",
+                    "native_frames": (
+                        NativeFrameIdentity(
+                            abi="arm64-v8a",
+                            module_build_id="abcd1234",
+                            module_name="libtest.so",
+                            module_relative_pc=12,
+                        ),
+                    ),
+                }
+            ),
+        }
+    )
+    await insert_batch(session, metadata(), [item], KEYS_V1)
+    await session.commit()
+
+    row = await session.scalar(select(InboxEvent))
+    assert row is not None
+    # Sender-controlled map keys and values are still scrubbed.
+    assert row.payload_json["fields"] == {"safe": "value"}
+    assert "installation_id" not in row.payload_json["occurrence"]
+    # Structural evidence survives instead of being silently destroyed.
+    assert row.device_model == "Example/Model"
+    assert row.os_version == "14/API 34"
+    assert row.payload_json["occurrence"]["device_model"] == "Example/Model"
+    assert len(row.native_identity_json) == 1
+    assert row.installation_hmac is not None
+
+
+@pytest.mark.asyncio
+async def test_server_request_id_is_not_sender_identity(session: AsyncSession) -> None:
+    """A short secret matching the server-generated request UUID must not reject the batch."""
+    item = occurrence_event("e-1", "uest-1")
+    await insert_batch(session, metadata(), [item], KEYS_V1)
+    await session.commit()
+    row = await session.scalar(select(InboxEvent))
+    assert row is not None
+    assert "installation_id" not in row.payload_json["occurrence"]

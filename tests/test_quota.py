@@ -43,6 +43,20 @@ NOW = datetime(2026, 7, 16, 1, 2, 30, tzinfo=UTC)
 
 
 @pytest.mark.asyncio
+async def test_rejected_batch_rollback_leaves_rate_windows_untouched(
+    session: AsyncSession,
+) -> None:
+    """Quota is charged in the batch transaction: a rejected batch must not burn budget."""
+    await consume_quota(session, PRINCIPAL, 1, NOW)
+    await session.commit()
+    await consume_quota(session, PRINCIPAL, 2, NOW)
+    await session.rollback()
+    # The full remaining budget is still available for the valid retry.
+    await consume_quota(session, PRINCIPAL, 2, NOW)
+    await session.commit()
+
+
+@pytest.mark.asyncio
 async def test_enforces_distributed_request_and_event_window(session: AsyncSession) -> None:
     await consume_quota(session, PRINCIPAL, 1, NOW)
     await session.commit()

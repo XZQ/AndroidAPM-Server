@@ -311,7 +311,8 @@ def _prepare_event(
                 metadata.app_id,
                 metadata.environment,
                 metadata.sdk_version,
-                metadata.request_id,
+                # request_id is server-generated, not sender identity: including it
+                # would randomly reject batches when a short secret matches a UUID.
                 app_version,
                 app_build,
                 version_code,
@@ -364,21 +365,33 @@ def _prepare_event(
     )
 
 
-def _remove_known_installation_plaintext(value: object, plaintext: str | None) -> None:
-    """Remove the known identifier from every durable map/list location before serialization."""
+_USER_MAP_KEYS = frozenset({"fields", "field_types", "global_context", "extras", "unknown"})
+
+
+def _remove_known_installation_plaintext(
+    value: object, plaintext: str | None, *, user_map: bool = False
+) -> None:
+    """Remove the known identifier from every durable map/list location before serialization.
+
+    Values are always scrubbed. Keys are scrubbed only inside sender-controlled maps:
+    structural schema keys (e.g. ``occurrence``) are vocabulary, not sender data, and
+    substring-matching them would silently destroy raw evidence for short identifiers.
+    """
     if not plaintext:
         return
     if isinstance(value, dict):
         for key in list(value):
             item = value[key]
-            if plaintext in key or (isinstance(item, str) and plaintext in item):
+            if (user_map and plaintext in key) or (isinstance(item, str) and plaintext in item):
                 del value[key]
             else:
-                _remove_known_installation_plaintext(item, plaintext)
+                _remove_known_installation_plaintext(
+                    item, plaintext, user_map=user_map or key in _USER_MAP_KEYS
+                )
     elif isinstance(value, list):
         value[:] = [item for item in value if not (isinstance(item, str) and plaintext in item)]
         for item in value:
-            _remove_known_installation_plaintext(item, plaintext)
+            _remove_known_installation_plaintext(item, plaintext, user_map=user_map)
 
 
 def _assert_existing_matches(

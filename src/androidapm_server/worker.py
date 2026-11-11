@@ -71,6 +71,36 @@ async def export_once(
     if not events:
         return 0
 
+    # A crash after the final attempt's send but before finalize leaves an expired
+    # processing row whose re-claim increments attempt_count past the budget. Such
+    # rows must be dead-lettered without granting one more OTLP send; the fence can
+    # stop a stale owner from recording progress but cannot un-send a request.
+    exhausted = [
+        event
+        for event in events
+        if event.attempt_count > settings.worker_max_attempts
+        and "pending" in event.export_signal_states_json.values()
+    ]
+    completed_exhausted = 0
+    if exhausted:
+        async with factory() as session:
+            for event in exhausted:
+                completed_exhausted += await mark_failed(
+                    session,
+                    owner,
+                    [event],
+                    False,
+                    settings.worker_max_attempts,
+                    "export_attempts_exhausted",
+                    "The export retry budget was exhausted before every signal was delivered",
+                )
+            await session.commit()
+        if completed_exhausted:
+            EXPORT_EVENTS.labels("dead_letter").inc(completed_exhausted)
+        events = [event for event in events if event not in exhausted]
+        if not events:
+            return completed_exhausted
+
     owned_clients: list[OtlpLogsClient] = []
     if metrics_client is None and any("metrics" in e.export_signal_states_json for e in events):
         metrics_client = OtlpMetricsClient(
@@ -199,7 +229,7 @@ async def export_once(
     # Publish outcomes only after commit, including partial batches where leases were lost.
     for label, count in outcomes.items():
         EXPORT_EVENTS.labels(label).inc(count)
-    return completed
+    return completed + completed_exhausted
 
 
 async def _record_signal(

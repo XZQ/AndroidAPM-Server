@@ -65,20 +65,10 @@ export function ConsoleLayout({ value }: { value: ConsoleContextValue }) {
         <nav aria-label="主导航">
           {nav.filter((item) => item.investigator !== true || canInvestigate(session.role)).map((item) => {
             const Icon = item.icon;
-            const unavailable = item.investigator === true && !canInvestigate(session.role);
             return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                aria-disabled={unavailable}
-                onClick={(event) => {
-                  if (unavailable) event.preventDefault();
-                  else setMenuOpen(false);
-                }}
-              >
+              <NavLink key={item.to} to={item.to} onClick={() => setMenuOpen(false)}>
                 <Icon size={17} aria-hidden="true" />
                 <span>{item.label}</span>
-                {unavailable ? <small>需调查员</small> : null}
               </NavLink>
             );
           })}

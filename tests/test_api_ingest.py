@@ -487,3 +487,80 @@ async def test_remote_config_is_signed_scoped_and_etag_cacheable(
         headers={**config_headers, "If-None-Match": response.headers["etag"]},
     )
     assert cached.status_code == 304
+
+
+@pytest.mark.asyncio
+async def test_remote_config_expired_rollout_excluded_and_inactive_revisions_return_204(
+    api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str],
+) -> None:
+    client, factory, key = api
+    private_key, _public_key = generate_signing_keypair()
+    issued = datetime.now(UTC)
+    config_headers = {**headers(key), "X-APM-Installation-Id": "installation-1"}
+
+    def signed_version(revision: int, *, rollout: int, active: bool = True) -> RemoteConfigVersion:
+        signed = sign_config(
+            private_key,
+            revision,
+            issued,
+            issued + timedelta(hours=1),
+            rollout,
+            {"revision": revision},
+            "key-1",
+        )
+        return RemoteConfigVersion(
+            tenant_id="tenant-a",
+            app_id="com.example",
+            environment="test",
+            revision=revision,
+            payload_json=signed.payload,
+            issued_at=issued,
+            expires_at=issued + timedelta(hours=1),
+            rollout_basis_points=rollout,
+            key_id="key-1",
+            signature_b64=signed.signature_b64,
+            created_by="test",
+            active=active,
+        )
+
+    async with factory() as session:
+        # Expired revisions never need a valid signature: they must not be served.
+        session.add(
+            RemoteConfigVersion(
+                tenant_id="tenant-a",
+                app_id="com.example",
+                environment="test",
+                revision=1,
+                payload_json={},
+                issued_at=issued - timedelta(hours=2),
+                expires_at=issued - timedelta(hours=1),
+                rollout_basis_points=10_000,
+                key_id="key-1",
+                signature_b64="expired",
+                created_by="test",
+            )
+        )
+        await session.commit()
+    assert (await client.get("/v1/config", headers=config_headers)).status_code == 204
+
+    async with factory() as session:
+        session.add(signed_version(2, rollout=0))
+        await session.commit()
+    assert (await client.get("/v1/config", headers=config_headers)).status_code == 204
+
+    async with factory() as session:
+        session.add(signed_version(3, rollout=10_000, active=False))
+        await session.commit()
+    assert (await client.get("/v1/config", headers=config_headers)).status_code == 204
+
+    async with factory() as session:
+        session.add(signed_version(4, rollout=10_000))
+        await session.commit()
+    latest = await client.get("/v1/config", headers=config_headers)
+    assert latest.status_code == 200
+    assert latest.json()["revision"] == 4
+
+    mismatched = await client.get(
+        "/v1/config", headers={**headers(key, environment="other"), "X-APM-Installation-Id": "i"}
+    )
+    assert mismatched.status_code == 403

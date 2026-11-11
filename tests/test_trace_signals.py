@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from androidapm_server import worker
 from androidapm_server.config import Settings, get_settings
 from androidapm_server.db.base import Base
-from androidapm_server.db.models import InboxEvent, QueryKey, Tenant
+from androidapm_server.db.models import AuditLog, InboxEvent, QueryKey, Tenant
 from androidapm_server.db.session import get_session
 from androidapm_server.domain import ApmEvent
 from androidapm_server.errors import ApiError
@@ -500,6 +500,18 @@ async def test_trace_query_auth_scope_window_and_raw_attributes(factory: Factory
         detail = await client.get(f"/v1/query/traces/{TRACE_ID}", params=WINDOW, headers=headers)
         assert detail.status_code == 200 and detail.json()["spans"][0]["name"] == "secret-operation"
         assert "secret-attribute" not in detail.text and '"attr_auth"' not in detail.text
+        async with factory() as session:
+            trace_audits = (
+                await session.scalars(
+                    select(AuditLog).where(AuditLog.action.like("query.trace.%"))
+                )
+            ).all()
+        assert {row.action for row in trace_audits} == {"query.trace.list", "query.trace.read"}
+        assert all(row.result == "success" for row in trace_audits)
+        assert all(
+            row.details_json["app_id"] == "app" and row.details_json["environment"] == "test"
+            for row in trace_audits
+        )
         viewer = await client.get(
             "/v1/query/traces", params=WINDOW, headers={"Authorization": f"Bearer {keys['viewer']}"}
         )
@@ -510,6 +522,13 @@ async def test_trace_query_auth_scope_window_and_raw_attributes(factory: Factory
         assert forged.status_code == 400
         absent = await client.get(f"/v1/query/traces/{'9' * 32}", params=WINDOW, headers=headers)
         assert absent.status_code == 404
+        async with factory() as session:
+            not_found = await session.scalar(
+                select(AuditLog).where(
+                    AuditLog.action == "query.trace.read", AuditLog.result == "not_found"
+                )
+            )
+        assert not_found is not None and not_found.object_id == "9" * 32
         empty = await client.get(
             "/v1/query/traces",
             params={"fromMs": NOW_MS + 1, "toMs": NOW_MS + 10_000},

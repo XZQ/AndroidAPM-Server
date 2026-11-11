@@ -10,7 +10,10 @@ from pathlib import Path
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from androidapm_server.constants import SYMBOLIZER_FINALIZE_MARGIN_SECONDS
+from androidapm_server.constants import (
+    EXPORT_FINALIZE_MARGIN_SECONDS,
+    SYMBOLIZER_FINALIZE_MARGIN_SECONDS,
+)
 
 
 class Settings(BaseSettings):
@@ -119,6 +122,14 @@ class Settings(BaseSettings):
             >= self.symbolizer_lease_seconds
         ):
             raise ValueError("symbolizer timeout must be shorter than its lease by over 5 seconds")
+        # A slow OTLP send must not outlive the export lease: an expired lease lets a
+        # second worker re-claim and re-send the same still-pending signal (duplicate
+        # delivery). The margin covers the fenced signal-record and finalize commits.
+        if (
+            self.otlp_timeout_seconds + EXPORT_FINALIZE_MARGIN_SECONDS
+            >= self.worker_lease_seconds
+        ):
+            raise ValueError("OTLP timeout must be shorter than the worker lease by over 5 seconds")
         if self.environment.lower() == "production":
             if not self.web_session_cookie_secure:
                 raise ValueError("production Web sessions require secure cookies")

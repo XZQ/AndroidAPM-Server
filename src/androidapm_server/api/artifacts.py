@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import suppress
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -155,39 +156,49 @@ async def _upload(
     )
     storage_key = identity.storage_key(staged.checksum_sha256, extension)
     promoted = await store.promote(staged, storage_key)
-    registration = await register_artifact(session, identity, staged, storage_key, principal.key_id)
     request_id = request.state.request_id
-    if registration.conflict:
-        # A different checksum uses a different immutable path and is safe to discard.
-        await store.discard(promoted)
+    try:
+        registration = await register_artifact(
+            session, identity, staged, storage_key, principal.key_id
+        )
+        if registration.conflict:
+            # A different checksum uses a different immutable path and is safe to discard.
+            session.add(
+                _audit(
+                    identity,
+                    principal.key_id,
+                    request_id,
+                    "conflict",
+                    staged,
+                    registration.artifact.id,
+                )
+            )
+            await session.commit()
+            raise ApiError(
+                409,
+                "artifact_identity_conflict",
+                "This build identity is already registered with different content",
+            )
+        await requeue_matching_missing_jobs(session, identity)
         session.add(
             _audit(
                 identity,
                 principal.key_id,
                 request_id,
-                "conflict",
+                "duplicate" if not registration.inserted else "success",
                 staged,
                 registration.artifact.id,
             )
         )
         await session.commit()
-        raise ApiError(
-            409,
-            "artifact_identity_conflict",
-            "This build identity is already registered with different content",
-        )
-    await requeue_matching_missing_jobs(session, identity)
-    session.add(
-        _audit(
-            identity,
-            principal.key_id,
-            request_id,
-            "duplicate" if not registration.inserted else "success",
-            staged,
-            registration.artifact.id,
-        )
-    )
-    await session.commit()
+    except Exception:
+        # A failed registration or commit must not leave the promoted immutable file
+        # unreferenced in the private volume. Discard is idempotent; a client retry
+        # re-promotes the same content-derived key. Cleanup never masks the original
+        # failure.
+        with suppress(OSError):
+            await store.discard(promoted)
+        raise
     return ArtifactAck(
         artifactId=registration.artifact.id,
         duplicate=not registration.inserted,

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from androidapm_server.api.query import (
+    _audit,
     _no_store,
     _optional_identifier,
     _reject_scope_parameters,
@@ -53,10 +54,29 @@ async def get_traces(
     spans, invalid, expired = await load_spans(
         session, principal, settings, from_ms, to_ms, release_version
     )
-    _no_store(response)
-    return build_trace_list(
+    result = build_trace_list(
         spans, invalid, principal, request.state.request_id, from_ms, to_ms, limit, expired
     )
+    # Free-form span names are L1 evidence: audit the read like event metadata reads.
+    session.add(
+        _audit(
+            principal,
+            request.state.request_id,
+            "query.trace.list",
+            "trace_page",
+            None,
+            "success",
+            {
+                "from_ms": from_ms,
+                "to_ms": to_ms,
+                "release_version": release_version,
+                "returned_count": len(result.items),
+            },
+        )
+    )
+    await session.commit()
+    _no_store(response)
+    return result
 
 
 @router.get("/traces/{trace_id}", response_model=TraceDetailResponse)
@@ -83,11 +103,40 @@ async def get_trace_detail(
         session, principal, settings, from_ms, to_ms, release_version, canonical
     )
     if not spans:
+        session.add(
+            _audit(
+                principal,
+                request.state.request_id,
+                "query.trace.read",
+                "trace",
+                canonical,
+                "not_found",
+                {},
+            )
+        )
+        await session.commit()
         raise ApiError(404, "trace_not_found", "Trace is not visible in this scope and window")
     if len(spans) > MAX_TRACE_DETAIL_SPANS:
         raise ApiError(
             422, "trace_span_limit", "Reduce the window; trace detail exceeds the span limit"
         )
+    session.add(
+        _audit(
+            principal,
+            request.state.request_id,
+            "query.trace.read",
+            "trace",
+            canonical,
+            "success",
+            {
+                "from_ms": from_ms,
+                "to_ms": to_ms,
+                "release_version": release_version,
+                "span_count": len(spans),
+            },
+        )
+    )
+    await session.commit()
     _no_store(response)
     summary = summarize_trace(canonical, spans)
     return TraceDetailResponse(

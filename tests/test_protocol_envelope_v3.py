@@ -96,3 +96,13 @@ def test_optional_statistics_context_and_legacy_absence() -> None:
     occurrence.session_id = "user-email-not-an-anonymous-session"
     with pytest.raises(ApiError):
         decode_envelope_v3(message.SerializeToString(), max_events=32)
+
+
+def test_extreme_int64_timestamp_is_a_non_retryable_validation_error() -> None:
+    message = envelope()
+    message.events[0].timestamp = 2**63 - 1
+
+    with pytest.raises(ApiError) as caught:
+        decode_envelope_v3(message.SerializeToString(), max_events=32)
+    assert caught.value.status_code == 422
+    assert caught.value.retryable is False

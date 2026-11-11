@@ -7,13 +7,14 @@ from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from androidapm_server.config import Settings
 from androidapm_server.constants import EVIDENCE_EXPIRED
 from androidapm_server.db.models import InboxEvent
 from androidapm_server.db.query import _execute_bounded, query_bucket_ms
+from androidapm_server.domain import IdentityQuality
 from androidapm_server.errors import ApiError
 from androidapm_server.performance_catalog import (
     DIMENSION_FIELDS,
@@ -197,6 +198,43 @@ async def load_observations(
         }
         facts.append(fact)
     return facts
+
+
+async def count_window_events(
+    session: AsyncSession,
+    principal: QueryPrincipal,
+    from_ms: int,
+    to_ms: int,
+    release_version: str | None,
+    events: frozenset[tuple[str, str]],
+) -> tuple[int, int]:
+    """Aggregate ``(samples, incident_count)`` in SQL for alert count metrics.
+
+    The predicates mirror ``load_observations`` plus the occurrence-bound release
+    filter alert evaluation applies, so the result is identical to counting the
+    projected rows. A single-row aggregation keeps high-volume windows evaluable
+    without the row budget; the driver/statement timeout still bounds execution.
+    """
+    module = InboxEvent.payload_json["module"].as_string()
+    name = InboxEvent.payload_json["name"].as_string()
+    incident = or_(*(and_(module == m, name == n) for m, n in sorted(events)))
+    statement = select(
+        func.count().label("samples"),
+        func.coalesce(func.sum(case((incident, 1), else_=0)), 0).label("incidents"),
+    ).where(
+        InboxEvent.tenant_id == principal.tenant_id,
+        InboxEvent.app_id == principal.app_id,
+        InboxEvent.environment == principal.environment,
+        InboxEvent.occurrence_timestamp_ms >= from_ms,
+        InboxEvent.occurrence_timestamp_ms < to_ms,
+    )
+    if release_version is not None:
+        statement = statement.where(
+            InboxEvent.app_version == release_version,
+            InboxEvent.release_identity_quality == IdentityQuality.OCCURRENCE_BOUND.value,
+        )
+    row = (await _execute_bounded(session, statement)).one()
+    return int(row.samples), int(row.incidents)
 
 
 def _value(row: dict[str, Any], field: PerformanceField) -> tuple[str, float | None]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import base64
 import importlib.util
 import json
@@ -17,13 +18,15 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from androidapm_server.alerts import deliver_once, evaluate_scope
+from androidapm_server import admin
+from androidapm_server.alerts import ALERT_RULE_LIMIT, deliver_once, evaluate_scope
 from androidapm_server.config import Settings, get_settings
 from androidapm_server.db.base import Base
 from androidapm_server.db.inbox import insert_batch
 from androidapm_server.db.models import (
     AlertDelivery,
     AlertInstance,
+    AlertRule,
     AuditLog,
     InboxEvent,
     QueryKey,
@@ -371,6 +374,166 @@ async def test_alert_firing_dedup_unknown_recovery_ack_and_retry_outbox(product:
     async with factory() as session:
         assert (await session.get(AlertDelivery, 1)).status == "DELIVERED"
         assert (await session.scalar(select(func.count()).select_from(AlertInstance))) == 1
+
+
+async def test_count_alerts_stay_evaluable_when_window_exceeds_row_budget(product: Any) -> None:
+    """Count metrics aggregate in SQL; a busy window must not silently stop alerting."""
+    client, factory, keys, settings = product
+    settings.query_max_rows = 2
+    rule = {"name": "Crash", "metric": "crash.count", "threshold": 0, "windowSeconds": 3600}
+    assert (await client.post("/v1/alerts/rules", json=rule, headers=auth(keys))).status_code == 201
+    await emit(
+        factory,
+        module="crash",
+        name="java_crash",
+        values=[{"stackTrace": "at app.fn(Main.kt:1)"}] * 2,
+    )
+    await emit(factory, values=[{"launchDurationMs": 120}] * 3)
+    assert (await client.post("/v1/alerts/evaluate", headers=auth(keys))).status_code == 200
+    state = (await client.get("/v1/alerts", headers=auth(keys))).json()
+    assert state["rules"][0]["state"] == "FIRING"
+    assert state["rules"][0]["lastValue"] == 2
+    assert state["rules"][0]["lastSampleCount"] == 5
+    assert len(state["instances"]) == 1
+
+
+async def test_p95_alert_rule_still_fails_closed_over_row_budget(product: Any) -> None:
+    client, factory, keys, settings = product
+    settings.query_max_rows = 1
+    rule = {
+        "name": "Launch",
+        "metric": "launch.cold_start.launchDurationMs.p95",
+        "threshold": 100,
+        "windowSeconds": 3600,
+    }
+    assert (await client.post("/v1/alerts/rules", json=rule, headers=auth(keys))).status_code == 201
+    await emit(factory, values=[{"launchDurationMs": 120}, {"launchDurationMs": 130}])
+    blocked = await client.post("/v1/alerts/evaluate", headers=auth(keys))
+    assert blocked.status_code == 422
+    assert blocked.json()["code"] == "query_row_limit"
+
+
+async def test_count_alert_release_scope_ignores_other_and_batch_declared_releases(
+    product: Any,
+) -> None:
+    client, factory, keys, _ = product
+    rule = {
+        "name": "Crash",
+        "metric": "crash.count",
+        "threshold": 0,
+        "windowSeconds": 3600,
+        "releaseVersion": "2.0.0",
+    }
+    assert (await client.post("/v1/alerts/rules", json=rule, headers=auth(keys))).status_code == 201
+    await emit(
+        factory, module="crash", name="java_crash", values=[{"stackTrace": "at app.fn(Main.kt:1)"}]
+    )
+    await emit(
+        factory,
+        module="crash",
+        name="java_crash",
+        values=[{"stackTrace": "at app.fn(Main.kt:1)"}] * 2,
+        release="3.0.0",
+    )
+    async with factory() as session:
+        await insert_batch(
+            session,
+            IngestMetadata(
+                request_id="v2-declared",
+                tenant_id="a",
+                app_id="app",
+                environment="local",
+                schema_version="2",
+                sdk_version="test",
+                protocol="protobuf_v2",
+                app_version="2.0.0",
+                installation_id="installation",
+            ),
+            [
+                ApmEvent(
+                    timestamp=NOW_MS,
+                    event_id="batch-declared-crash",
+                    module="crash",
+                    name="java_crash",
+                    kind="ALERT",
+                    severity="FATAL",
+                    priority="CRITICAL",
+                    process_name="app",
+                    thread_name="main",
+                    fields={"stackTrace": "at app.fn(Main.kt:1)"},
+                )
+            ],
+            InstallationHmacKeyRing.parse(HMAC, "v1"),
+        )
+        await session.commit()
+    assert (await client.post("/v1/alerts/evaluate", headers=auth(keys))).status_code == 200
+    state = (await client.get("/v1/alerts", headers=auth(keys))).json()
+    assert state["rules"][0]["lastValue"] == 1
+    assert state["rules"][0]["lastSampleCount"] == 1
+
+
+async def test_alert_rule_limit_is_enforced(product: Any) -> None:
+    client, factory, keys, _ = product
+    async with factory() as session:
+        for index in range(ALERT_RULE_LIMIT):
+            session.add(
+                AlertRule(
+                    tenant_id="a",
+                    app_id="app",
+                    environment="local",
+                    name=f"rule-{index}",
+                    metric="crash.count",
+                    comparison="gt",
+                    threshold=1,
+                    min_samples=1,
+                    window_seconds=900,
+                )
+            )
+        await session.commit()
+    blocked = await client.post(
+        "/v1/alerts/rules",
+        json={"name": "overflow", "metric": "crash.count", "threshold": 0, "windowSeconds": 60},
+        headers=auth(keys),
+    )
+    assert blocked.status_code == 422
+    assert blocked.json()["code"] == "alert_rule_limit"
+
+
+async def test_cli_audits_are_visible_in_scoped_management_trail(
+    product: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CLI credential/config actions must not disappear from the scoped audit UI."""
+    client, factory, keys, settings = product
+    monkeypatch.setattr(admin, "get_session_factory", lambda: factory)
+    monkeypatch.setattr(admin, "get_settings", lambda: settings)
+    await admin.create_ci_key(
+        argparse.Namespace(
+            tenant_id="a",
+            tenant_name="A",
+            app_id="app",
+            description="CI pipeline",
+            expires_days=None,
+        )
+    )
+    payload_file = tmp_path / "payload.json"
+    payload_file.write_text('{"flag": true}', encoding="utf-8")
+    revision = await admin.publish_config(
+        argparse.Namespace(
+            tenant_id="a",
+            app_id="app",
+            environment="local",
+            payload=payload_file,
+            expires_hours=24,
+            rollout_basis_points=10_000,
+            created_by="local-admin-cli",
+        )
+    )
+    assert revision == 1
+
+    audit = (await client.get("/v1/manage/audit", headers=auth(keys))).json()["items"]
+    actions = {item["action"] for item in audit}
+    assert "ci_key.create" in actions
+    assert "remote_config.publish" in actions
 
 
 async def test_performance_unknown_gc_sentinels_never_make_zero_and_limits(product: Any) -> None:

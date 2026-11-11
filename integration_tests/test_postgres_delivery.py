@@ -10,15 +10,16 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from androidapm_server.artifacts import ArtifactIdentity, StagedArtifact, inspect_native_elf
 from androidapm_server.constants import ARTIFACT_TYPE_JAVA_MAPPING
 from androidapm_server.db.artifacts import register_artifact
 from androidapm_server.db.inbox import insert_batch
+from androidapm_server.db.leases import lease_write_time
 from androidapm_server.db.models import InboxEvent, ReleaseDecision, SymbolArtifact, Tenant
-from androidapm_server.db.worker import claim_batch
+from androidapm_server.db.worker import claim_batch, mark_delivered
 from androidapm_server.domain import ApmEvent, IngestMetadata
 from androidapm_server.errors import ApiError
 
@@ -260,6 +261,52 @@ async def test_skip_locked_assigns_distinct_rows_to_concurrent_owners(
     finally:
         await first_session.close()
         await second_session.close()
+    async with factory() as session:
+        await session.execute(delete(InboxEvent).where(InboxEvent.tenant_id == tenant_id))
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_lease_expiry_is_fenced_by_database_clock_not_host_clock(
+    factory: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production fencing must use clock_timestamp(), never the worker host clock."""
+    tenant_id = f"integration-{uuid.uuid4().hex}"
+    async with factory() as session:
+        await insert_batch(session, metadata(tenant_id, "fencing"), [event("fenced")])
+        await session.commit()
+    async with factory() as session:
+        claimed = await claim_batch(session, "owner-one", 1, 60)
+        assert len(claimed) == 1
+        row_id = claimed[0].id
+        await session.commit()
+
+    # Expire the lease on the database clock, then skew the worker host clock far
+    # into the past. A host-clock implementation would admit the stale owner.
+    async with factory() as session:
+        await session.execute(
+            update(InboxEvent)
+            .where(InboxEvent.id == row_id)
+            .values(lease_expires_at=text("clock_timestamp() - interval '1 second'"))
+        )
+        await session.commit()
+
+    class SkewedDatetime:
+        @staticmethod
+        def now(tz: object = None) -> datetime:
+            return datetime(2020, 1, 1, tzinfo=UTC)
+
+    monkeypatch.setattr("androidapm_server.db.leases.datetime", SkewedDatetime)
+    async with factory() as session:
+        assert not isinstance(lease_write_time(session), datetime)
+        assert await mark_delivered(session, "owner-one", [row_id]) == 0
+    async with factory() as session:
+        reclaimed = await claim_batch(session, "owner-two", 1, 60)
+        assert len(reclaimed) == 1 and reclaimed[0].id == row_id
+        await session.commit()
+    async with factory() as session:
+        assert await mark_delivered(session, "owner-one", [row_id]) == 0
+        assert await mark_delivered(session, "owner-two", [row_id]) == 1
     async with factory() as session:
         await session.execute(delete(InboxEvent).where(InboxEvent.tenant_id == tenant_id))
         await session.commit()

@@ -41,11 +41,11 @@ export function IssuesPage() {
       <PageHeader
         eyebrow="问题归类 / 稳定指纹"
         title="Issues"
-        description={`按发生时身份聚合 ${filters.newRelease} 的 Java Crash 与 ANR，不展示原始异常内容`}
+        description={`按发生时身份聚合 ${filters.newRelease} 的 Java/Native Crash、ANR 与历史 Tombstone，不展示原始异常内容`}
       />
       <div className="issues-toolbar">
         <label className="search-control"><Search size={16} /><span className="sr-only">搜索指纹</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索指纹或问题类型" /></label>
-        <label><span className="sr-only">问题类型</span><select value={family} onChange={(event) => setFamily(event.target.value)}><option value="ALL">全部问题</option><option value="JAVA_CRASH">Java Crash</option><option value="ANR">ANR</option></select></label>
+        <label><span className="sr-only">问题类型</span><select value={family} onChange={(event) => setFamily(event.target.value)}><option value="ALL">全部问题</option><option value="JAVA_CRASH">Java Crash</option><option value="NATIVE_CRASH">Native Crash</option><option value="ANR">ANR</option><option value="NATIVE_TOMBSTONE">历史 Tombstone</option></select></label>
         <span>{formatDateTime(filters.fromMs)} — {formatDateTime(filters.toMs)}</span>
       </div>
       {data === null && error === null ? <LoadingPanel label="正在聚合 Issues…" /> : null}

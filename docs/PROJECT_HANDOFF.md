@@ -1,6 +1,34 @@
 # AndroidAPM-Server 项目交接
 
-> 当前基线：2026-11-07，服务端唯一分支 `main`。本文区分“本机已验证”“公网只读已验证”和“需要外部环境验证”，历史条目保留当时事实。
+> 当前基线：2026-11-11，服务端唯一分支 `main`。本文区分“本机已验证”“公网只读已验证”和“需要外部环境验证”，历史条目保留当时事实。
+
+## 2026-11-11 深度 review 轮（五区域审查 + 逐条核实修复）
+
+本轮对 ingest/协议/身份、query/web/告警、worker/符号化/OTLP、Web 前端、配置/部署/CI/文档五个区域做深度审查（并行子代理 + 主线复核），**每条发现先亲自核实代码路径再修**，延续 2026-11-07 的"只修证实问题"纪律。核心 durability/dedup/租户隔离/HMAC/ACK/fencing 不变量经审查与既有测试确认成立，未发现 P0/P1。
+
+**已修复（全部有回归测试）**：
+
+| # | 问题 | 修复 |
+|---|---|---|
+| ① P2 | 极端 int64 事件时间戳（如 `2**63-1`）使 `datetime.fromtimestamp` 抛 OSError/OverflowError，穿透四个 decoder 的 `except (ValueError, ValidationError)` 变成**可重试 500 毒丸批次**（SDK 永不删除、无限重放） | `domain.validate_timestamp_skew` 捕获并转为非重试 422；line/V2/V3/protobuf 各加回归 |
+| ② P2 | line 协议 `str.splitlines()` 在 CR/VT/FF/NEL/Unicode 分隔符处过度切分，异常消息含合法 CR 的整批被**非重试 422 永久拒绝**（崩溃证据静默丢失） | 只按 `\n` 切分，容忍 CRLF 与单个结尾换行；值内分隔符保留；docs/02 明确分隔符语义 |
+| ③ P2 | 导出 worker 缺 `otlp_timeout + 5 < worker_lease` 校验（symbolizer 有同类约束）：合法配置组合下慢 OTLP 发送活过租约 → 第二 worker 重领并**重复发送**同一 pending 信号 | config 启动强校验 + `EXPORT_FINALIZE_MARGIN_SECONDS` 常量；docs/08 同步 |
+| ④ P3 | 末次尝试发送后崩溃的重领会**超预算再发送一次**（claim 即递增 attempt_count，无导出前守卫；symbolizer 有守卫） | `export_once` 对 `attempt_count > max` 且仍有 pending 信号的事件直接 dead-letter（`export_attempts_exhausted`），不再发送；注意守卫用 `>` 而非 `>=`（领取计数语义与 symbolizer 不同） |
+| ⑤ P3 | 非 ASCII CSRF cookie/header 使 `hmac.compare_digest(str,str)` 抛 TypeError → 所有 cookie 写端点 **500 而非 403**（已复现；fail-closed 非绕过） | 显式拒绝非 ASCII（签发 token 恒为 ASCII）；补 3 组字节级回归 + 跨会话 CSRF 绑定回归 |
+| ⑥ P3 | 隐私清洗器对**结构键**做子串匹配：短 installation ID（如 `occ`）会删除整个 `occurrence` 对象（native 身份证据静默销毁）；服务端 request_id 参与身份冲突检查导致随机 422 | 值仍全量清洗；键只在 sender-controlled map（fields/field_types/context/extras/unknown）内清洗；request_id 移出冲突检查。UUID 形态真实输入行为不变（既有隐私测试全绿） |
+| ⑦ P3 | 告警计数规则加载全窗口行，高流量 scope 超 `query_max_rows` 时**整轮静默失败**（只有 warning 日志，规则永不触发/恢复） | 计数指标改 SQL 聚合 `count_window_events`（与行投影严格同谓词，含 release+OCCURRENCE_BOUND 过滤）；p95 规则保持 fail-closed 但日志可区分（`alert_evaluation_budget_blocked`）；docs/11 同步 |
+| ⑧ P3 | 制品 promote 后注册/提交失败留下**孤儿不可变文件**（仅 conflict 分支清理） | post-promote 全路径 try/except 清理（幂等 discard，不掩盖原异常） |
+| ⑨ P3 | Trace 列表/详情读取**无审计**（同为 L1 自由 name，事件读取有审计）；CLI `remote_config.publish` 审计缺 app/env、`ci_key.create` 缺 environment → 均不出现在 scope 审计 UI | Trace 补 `query.trace.list`/`query.trace.read`（含 not_found）；CLI publish 补 scope 字段；CI key 审计显式 `environment: null`，审计过滤器纳入 app 级无 environment 行（同 app 各环境管理员可见） |
+| ⑩ P3 | 前端契约漂移与 UX：IssuesPage 筛选/描述缺 `NATIVE_CRASH`/`NATIVE_TOMBSTONE`（服务端指纹早已包含）；配置 JSON 解析错误被吞成通用"操作失败"；登录网络错误文案写死"本地"；告警/设置页裸 ISO 时间；ConsoleLayout 死分支、format.ts 冗余三元 | 全部修复；删除路由化重构后无引用的 5 个遗留组件（EventInspector/FingerprintList/DataQualityStrip/MetricCard+test），"真零 vs 不可用"不变量测试移植到实际使用的 MetricTile（Primitives.test.tsx） |
+| ⑪ P3 | CLI `--role` 错误文案漏 admin（choices 与校验本身正确） | 文案修正 |
+
+**核实后有意不修（记录于云端待建设清单 2026-11-11 节）**：FLOAT/DOUBLE 非规范文本收紧（破坏历史批次重放兼容不变量，文档只承诺整数规范文本）；Native 指纹 signal 的 typed/legacy 编码差异（改指纹需 ADR 0009 版本化迁移）；dead-letter 重放工具、告警实例保留策略、容量 SUM 覆盖索引、Actions SHA 固定、控制台默认版本 API、符号化 resolution-only 重试退避。
+
+**测试缺口补齐（新增 38 项后端 + 3 项前端）**：四协议极端时间戳、line 分隔符/CRLF/ts 不回显、短 ID 结构证据保留、request_id 非身份、会话 token 7 类拒绝路径 + 签名/base64 篡改、非 ASCII CSRF、跨会话 CSRF 绑定、key 到期使 cookie 会话失效、跨租户游标重放 400、导出预算崩溃窗口、otlp timeout/lease 校验、告警高流量计数/p95 fail-closed/release+batch-declared 过滤/规则上限、CLI 审计可见性、Trace 审计、制品孤儿清理、`/v1/config` expired/rollout/inactive/scope 边界、quota 回滚不烧预算、**PostgreSQL DB 时钟 fencing 集成测试**（host clock 偏斜下过期租约拒绝 stale owner；本机 skip，CI 有 `APM_TEST_POSTGRES_URL` 时执行——此前该生产机制零覆盖）。
+
+**本轮验证（本机，2026-11-11）**：`uv sync --all-groups --frozen`、Ruff、mypy（63 source files）、`pytest --basetemp <短目录>` **579 passed / 1 skipped**（skip 为未配置 `APM_TEST_NDK_BIN`；默认长 Temp 下仍有 4 个既有 artifact 长路径失败，属历史记载的 Windows MAX_PATH 问题）、15 份必需文档与 Alembic head/版本号一致性、凭据扫描、`git diff --check` 全部通过。前端 ESLint、TypeScript、**8 suites / 31 Vitest tests**、生产 build（JS 319.46 kB / gzip 100.37 kB）通过。本机 PATH 无 node/pnpm，前端门禁用 ZCode 自带 Electron 运行时（node v24.21.0）等价执行四个 scripts 的底层命令；CI 仍用 pinned node 24.15.0 + pnpm 11.19.0。本机无 Docker CLI，镜像 build 与 production overlay `compose config` 由 CI 验证；6+1 项 PostgreSQL 集成测试本机 skip。配置/部署自查：Dockerfile（pinned 基础镜像、非 root、read-only、healthcheck）、compose 双层（cap_drop/no-new-privileges/内部 metrics）、Caddyfile（HSTS/安全头/私有路径 404/liveness 探针）、CI（PG round-trip、覆盖率门禁、secret scan、overlay config）、.gitignore（.env*/.local 覆盖）均与文档一致，未发现新漂移。
+
+**发布状态**：本轮为代码/测试/文档修复，**线上仍是旧镜像，尚未重新部署**；③④⑦ 等修复需随下次发布生效。服务器侧待办（配置回收、证书告警变量、备份演练等）不变，见 `docs/13` 第 4、5 节。
 
 ## 2026-11-07 复核轮（review 结论再验证与修复）
 

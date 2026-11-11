@@ -24,7 +24,15 @@ def decode_line_batch(payload: bytes, max_events: int) -> list[ApmEvent]:
     except UnicodeDecodeError as error:
         raise ApiError(400, "invalid_encoding", "The request body must be valid UTF-8") from error
 
-    raw_lines = text.splitlines()
+    # The documented delimiter is "\n" only. str.splitlines() would also split on
+    # CR, VT, FF, NEL and Unicode separators that legitimately occur inside exception
+    # messages, rejecting the whole batch as non-retryable and losing crash evidence.
+    raw_lines = text.split("\n")
+    # One trailing newline terminates the final event instead of forming a blank one.
+    if raw_lines and raw_lines[-1] == "":
+        raw_lines.pop()
+    # Tolerate CRLF senders without treating a mid-value CR as a separator.
+    raw_lines = [line[:-1] if line.endswith("\r") else line for line in raw_lines]
     if not raw_lines or all(not line for line in raw_lines):
         raise ApiError(422, "invalid_event", "The batch must contain at least one event", False, 0)
     if len(raw_lines) > max_events:
@@ -56,8 +64,13 @@ def _decode_line(line: str, event_index: int) -> ApmEvent:
     unknown = {key: value for key, value in segments.items() if key not in KNOWN_KEYS}
     foreground = _parse_foreground(segments.get("foreground"), event_index)
     try:
+        timestamp = int(segments["ts"])
+    except ValueError as error:
+        # A static message keeps the sender's raw ts text out of the error body.
+        raise _invalid_event("ts must be an integer millisecond timestamp", event_index) from error
+    try:
         return ApmEvent(
-            timestamp=int(segments["ts"]),
+            timestamp=timestamp,
             event_id=segments["eventId"],
             module=segments["module"],
             name=segments["name"],

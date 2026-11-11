@@ -148,6 +148,35 @@ it("never sends Trace requests for a viewer opening a deep link", async () => {
   expect(globalThis.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/v1/query/traces"), expect.anything());
 });
 
+it("filters Native Crash and historical Tombstone families on the Issues page", async () => {
+  const fingerprints = {
+    requestId: "fp", state: "PRESENT", sampleCount: 6, fingerprintCoverage: 1, installationReason: null,
+    items: [
+      { fingerprint: "j".repeat(64), eventFamily: "JAVA_CRASH", eventCount: 3, affectedInstallationCount: 2, firstSeenMs: 1000, lastSeenMs: 2000 },
+      { fingerprint: "n".repeat(64), eventFamily: "NATIVE_CRASH", eventCount: 2, affectedInstallationCount: 1, firstSeenMs: 1000, lastSeenMs: 2000 },
+      { fingerprint: "t".repeat(64), eventFamily: "NATIVE_TOMBSTONE", eventCount: 1, affectedInstallationCount: null, firstSeenMs: 1000, lastSeenMs: 2000 },
+    ],
+  };
+  setup("issues", "viewer", (path) => path.startsWith("/v1/query/fingerprints?") ? json(fingerprints) : undefined);
+  await screen.findByRole("heading", { name: "Issues" });
+  expect(await screen.findByText("NATIVE_CRASH")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("问题类型"), { target: { value: "NATIVE_CRASH" } });
+  expect(screen.queryByText("JAVA_CRASH")).not.toBeInTheDocument();
+  expect(screen.getByText("NATIVE_CRASH")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("问题类型"), { target: { value: "NATIVE_TOMBSTONE" } });
+  expect(screen.queryByText("NATIVE_CRASH")).not.toBeInTheDocument();
+  expect(screen.getByText("NATIVE_TOMBSTONE")).toBeInTheDocument();
+});
+
+it("surfaces a specific client-side error for invalid config JSON without posting", async () => {
+  setup("settings");
+  await screen.findByRole("heading", { name: "设置" });
+  fireEvent.change(screen.getByLabelText("配置 JSON"), { target: { value: "{invalid" } });
+  fireEvent.click(screen.getByRole("button", { name: "发布签名配置" }));
+  expect(await screen.findByText(/配置 JSON 无效/)).toBeInTheDocument();
+  expect(posts.some((item) => item.path === "/v1/manage/configs")).toBe(false);
+});
+
 function json(body: unknown, status = 200): Promise<Response> {
   return Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
 }

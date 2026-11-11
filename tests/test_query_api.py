@@ -674,6 +674,15 @@ async def test_event_pagination_is_allow_listed_audited_and_filter_bound(
     assert invalid.status_code == 400
     assert invalid.json()["code"] == "invalid_cursor"
 
+    # The HMAC binds the tenant: another tenant's credential cannot replay this cursor.
+    cross_tenant = await client.get(
+        "/v1/query/events",
+        headers=auth(credentials["investigator-b"]),
+        params=window_params(releaseVersion="2.0.0", limit=1, cursor=body["nextCursor"]),
+    )
+    assert cross_tenant.status_code == 400
+    assert cross_tenant.json()["code"] == "invalid_cursor"
+
     async with factory() as session:
         audit_count = await session.scalar(
             select(func.count(AuditLog.id)).where(AuditLog.action == "query.events.list")

@@ -51,3 +51,22 @@ def test_rejects_more_than_configured_event_count() -> None:
     with pytest.raises(ApiError) as caught:
         decode_protobuf_batch(make_message("one") + make_message("two"), 1, 256 * 1024)
     assert caught.value.status_code == 413
+
+
+def test_extreme_int64_timestamp_is_a_non_retryable_validation_error() -> None:
+    message = ApmEventMessage(
+        timestamp=2**63 - 1,
+        event_id="extreme-ts",
+        module="crash",
+        name="java_crash",
+        kind="ALERT",
+        severity="FATAL",
+        priority="CRITICAL",
+        process_name="com.example",
+        thread_name="main",
+    ).SerializeToString()
+    body = len(message).to_bytes(4, "big") + message
+    with pytest.raises(ApiError) as caught:
+        decode_protobuf_batch(body, 32, 256 * 1024)
+    assert caught.value.status_code == 422
+    assert caught.value.retryable is False

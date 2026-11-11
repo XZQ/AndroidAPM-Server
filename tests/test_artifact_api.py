@@ -20,6 +20,7 @@ from androidapm_server.constants import CI_SCOPE_ARTIFACT_WRITE
 from androidapm_server.db.base import Base
 from androidapm_server.db.models import AuditLog, CiKey, IngestKey, SymbolArtifact, Tenant
 from androidapm_server.db.session import get_session
+from androidapm_server.errors import ApiError
 from androidapm_server.main import create_app
 
 MAPPING = b"com.example.RealClass -> a:\n    1:1:void run():10:10 -> a\n"
@@ -106,6 +107,27 @@ async def test_mapping_identity_accepts_protocol_width(
     assert (
         await client.post("/v1/artifacts/java-mapping", headers=headers, content=MAPPING)
     ).status_code == 400
+
+
+async def test_failed_registration_discards_the_promoted_immutable_file(
+    artifact_api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str, str, Path],
+) -> None:
+    """A post-promote failure must not leave an unreferenced file in the private volume."""
+    client, factory, key, _ingest_key, root = artifact_api
+    headers = artifact_headers(key, MAPPING)
+    with patch(
+        "androidapm_server.api.artifacts.register_artifact",
+        new=AsyncMock(
+            side_effect=ApiError(503, "synthetic_registration_failure", "Synthetic failure", True)
+        ),
+    ):
+        response = await client.post(
+            "/v1/artifacts/java-mapping", headers=headers, content=MAPPING
+        )
+    assert response.status_code == 503
+    async with factory() as session:
+        assert await session.scalar(select(func.count()).select_from(SymbolArtifact)) == 0
+    assert [path for path in root.rglob("*") if path.is_file()] == []
 
 
 async def test_packaged_mapping_upload_and_replay(

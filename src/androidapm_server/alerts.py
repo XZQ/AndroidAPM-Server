@@ -19,7 +19,7 @@ from androidapm_server.db.leases import lease_claim_time, lease_write_time
 from androidapm_server.db.models import AlertDelivery, AlertInstance, AlertRule, Tenant
 from androidapm_server.db.session import get_session_factory
 from androidapm_server.errors import ApiError
-from androidapm_server.performance import load_observations, summarize
+from androidapm_server.performance import count_window_events, load_observations, summarize
 from androidapm_server.performance_catalog import PERFORMANCE_BY_ID
 from androidapm_server.query import QueryModel
 from androidapm_server.query_auth import QueryPrincipal
@@ -139,27 +139,31 @@ async def evaluate_rule(
     principal = QueryPrincipal(
         rule.tenant_id, "alert-worker", rule.app_id, rule.environment, "viewer", None
     )
-    rows = await load_observations(
-        session,
-        principal,
-        settings,
-        from_ms,
-        to_ms,
-        (rule.release_version,) if rule.release_version else None,
-    )
-    if rule.release_version is not None:
-        rows = [row for row in rows if row["release_identity_quality"] == "OCCURRENCE_BOUND"]
     value: float | None
     if rule.metric in ALERT_COUNT_EVENTS:
-        count = sum(
-            (row["normalized_json"].get("module"), row["normalized_json"].get("name"))
-            in ALERT_COUNT_EVENTS[rule.metric]
-            for row in rows
+        # Count metrics aggregate in SQL so high-volume windows stay evaluable even
+        # when the row projection budget would block a full load_observations read.
+        samples, count = await count_window_events(
+            session,
+            principal,
+            from_ms,
+            to_ms,
+            rule.release_version,
+            ALERT_COUNT_EVENTS[rule.metric],
         )
         # Empty telemetry is unknown coverage, not proof that incidents recovered.
-        samples = len(rows)
-        value = float(count) if rows else None
+        value = float(count) if samples else None
     else:
+        rows = await load_observations(
+            session,
+            principal,
+            settings,
+            from_ms,
+            to_ms,
+            (rule.release_version,) if rule.release_version else None,
+        )
+        if rule.release_version is not None:
+            rows = [row for row in rows if row["release_identity_quality"] == "OCCURRENCE_BOUND"]
         observation = summarize(rows, PERFORMANCE_BY_ID[rule.metric.removesuffix(".p95")])
         samples = observation.sample_count
         value = observation.p95 if observation.coverage == 1 else None
@@ -396,6 +400,19 @@ async def alert_loop() -> None:
                                 ),
                             )
                             await session.commit()
+                    except ApiError as error:
+                        if error.code == "query_row_limit":
+                            # p95 rules still project rows: a budget-blocked window keeps
+                            # existing episodes unchanged (fail closed) but must stay
+                            # operationally visible instead of degrading silently.
+                            logger.warning(
+                                "alert_evaluation_budget_blocked",
+                                tenant_id=tenant,
+                                app_id=app,
+                                environment=environment,
+                            )
+                        else:
+                            logger.warning("alert_scope_evaluation_failed", tenant_id=tenant)
                     except Exception:
                         logger.warning("alert_scope_evaluation_failed", tenant_id=tenant)
                 for _ in range(100):

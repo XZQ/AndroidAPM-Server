@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 SYMBOLIZER_FINALIZE_MARGIN_SECONDS = 5
+EXPORT_FINALIZE_MARGIN_SECONDS = 5
 
 HEADER_SCHEMA_VERSION = "X-APM-Schema-Version"
 HEADER_APP_ID = "X-APM-App-Id"

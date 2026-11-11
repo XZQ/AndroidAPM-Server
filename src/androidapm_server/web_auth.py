@@ -187,11 +187,17 @@ def _verify_csrf(request: Request, claims: WebSessionClaims) -> None:
     """Compare cookie, header, and the digest bound into the signed session."""
     cookie = request.cookies.get(WEB_CSRF_COOKIE)
     header = request.headers.get(WEB_CSRF_HEADER)
+    # Issued tokens are ASCII (token_urlsafe). Starlette decodes header/cookie bytes
+    # as latin-1, so a corrupted client can surface non-ASCII str here;
+    # hmac.compare_digest(str, str) would raise TypeError and turn a rejected write
+    # into a 500. Reject non-ASCII explicitly to keep the failure a bounded 403.
     if (
         cookie is None
         or header is None
         or len(cookie) > 256
         or len(header) > 256
+        or not cookie.isascii()
+        or not header.isascii()
         or not hmac.compare_digest(cookie, header)
     ):
         raise _invalid_csrf()

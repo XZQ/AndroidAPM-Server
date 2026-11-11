@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 
 import type { MetricResult } from "../types";
-import { MetricCard } from "./MetricCard";
+import { MetricTile } from "./Primitives";
 
 const base: MetricResult = {
   state: "ZERO",
@@ -16,12 +16,12 @@ const base: MetricResult = {
 };
 
 it("renders a proven zero separately from an unavailable metric", () => {
-  const { rerender } = render(<MetricCard label="Java Crash" metric={base} />);
+  const { rerender } = render(<MetricTile label="Java Crash" metric={base} />);
   expect(screen.getByText("真实零值")).toBeInTheDocument();
   expect(screen.getByText("0")).toBeInTheDocument();
 
   rerender(
-    <MetricCard
+    <MetricTile
       label="Crash-free sessions"
       metric={{
         ...base,
@@ -35,4 +35,16 @@ it("renders a proven zero separately from an unavailable metric", () => {
   expect(screen.getByText("不可计算")).toBeInTheDocument();
   expect(screen.getByText("客户端尚未提供标准会话身份")).toBeInTheDocument();
   expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+});
+
+it("keeps a missing ratio distinct from a zero ratio", () => {
+  render(
+    <MetricTile
+      label="安装影响率"
+      kind="ratio"
+      metric={{ ...base, state: "NO_DATA", value: null, coverage: null }}
+    />,
+  );
+  expect(screen.getByText("无合格样本")).toBeInTheDocument();
+  expect(screen.getByText("—")).toBeInTheDocument();
 });

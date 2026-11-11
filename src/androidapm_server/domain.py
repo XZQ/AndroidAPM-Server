@@ -221,7 +221,13 @@ class ApmEvent(BaseModel):
     @model_validator(mode="after")
     def validate_timestamp_skew(self) -> ApmEvent:
         """Reject events implausibly far in the future while accepting old telemetry."""
-        timestamp = datetime.fromtimestamp(self.timestamp / 1000, tz=UTC)
+        try:
+            timestamp = datetime.fromtimestamp(self.timestamp / 1000, tz=UTC)
+        except (OverflowError, OSError, ValueError) as error:
+            # int64 millisecond values can exceed the platform datetime range. They
+            # must surface as a non-retryable validation error, never as an unhandled
+            # OSError/OverflowError that becomes a retryable 500 poison batch.
+            raise ValueError("timestamp is outside the representable range") from error
         if timestamp > datetime.now(UTC) + timedelta(seconds=MAX_FUTURE_SKEW_SECONDS):
             raise ValueError("timestamp is too far in the future")
         return self
