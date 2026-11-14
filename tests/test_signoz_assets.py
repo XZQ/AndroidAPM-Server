@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import httpx
 
+from androidapm_server.performance_catalog import PERFORMANCE_FIELDS
 from androidapm_server.signoz.assets import find_named_id, load_assets, sync_assets
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +46,47 @@ def test_checked_in_assets_use_exact_runtime_events_and_stay_unrouted() -> None:
         for alert in alerts
         for threshold in alert["condition"]["thresholds"]["spec"]
     )
+
+
+def test_asset_field_attributes_exist_in_the_exporter_allow_list() -> None:
+    """A typo in a dashboard/alert field attribute would silently match nothing."""
+    dashboards = load_assets(ROOT / "deploy" / "signoz" / "dashboards")
+    alerts = load_assets(ROOT / "deploy" / "signoz" / "alerts")
+    rendered = json.dumps(dashboards + alerts, sort_keys=True)
+    referenced = set(re.findall(r"android\.apm\.field\.([A-Za-z0-9_]+)", rendered))
+    registered = {field.field for field in PERFORMANCE_FIELDS}
+    assert referenced, "assets must reference at least one registered field"
+    assert referenced <= registered, referenced - registered
+    # Base attributes used by the assets must match the exporter's real names (otlp/logs.py).
+    base_attributes = {
+        "android.apm.event_id",
+        "android.apm.module",
+        "android.apm.name",
+        "android.apm.kind",
+        "android.apm.priority",
+        "android.apm.thread.name",
+        "android.apm.scene",
+        "android.apm.foreground",
+        "android.apm.protocol",
+        "android.apm.schema_version",
+        "android.apm.release_identity_quality",
+        "android.apm.installation_identity_quality",
+        "android.apm.timestamp_quality",
+        "android.apm.normalization_version",
+        "android.apm.installation.hmac",
+        "android.apm.installation.hmac_key_version",
+        "android.apm.incident.fingerprint",
+        "android.apm.crash.fingerprint",
+        "android.apm.symbolization.status",
+        "android.apm.symbolization.tool",
+        "android.apm.symbolization.tool_version",
+    }
+    referenced_base = {
+        f"android.apm.{name}"
+        for name in re.findall(r"android\.apm\.([a-z][a-z0-9_.]*)", rendered)
+        if not name.startswith("field.")
+    }
+    assert referenced_base <= base_attributes, referenced_base - base_attributes
 
 
 def test_finds_named_id_inside_api_envelopes() -> None:

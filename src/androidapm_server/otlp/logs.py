@@ -35,65 +35,6 @@ SEVERITY_NUMBERS: dict[str, SeverityNumber.ValueType] = {
     "FATAL": SEVERITY_NUMBER_FATAL,
 }
 
-# The SDK's compatibility Protobuf stringifies field values. Only source-reviewed
-# names are converted back to numeric/bool OTLP attributes; unknown values remain strings.
-INTEGER_FIELD_NAMES = frozenset(
-    {
-        "statusCode",
-        "requestSize",
-        "responseSize",
-        "totalRequests",
-        "successCount",
-        "errorCount",
-        "emitCount",
-        "dropCount",
-        "queueSize",
-        "internalErrorCount",
-        "diagnosticDroppedCount",
-        "diagnosticWriteFailureCount",
-        "frameCount",
-        "slowFrameCount",
-        "droppedFrames",
-        "jankCount",
-        "frozenCount",
-        "phaseContentProviderCount",
-        "viewCount",
-        "maxDepth",
-    }
-)
-FLOAT_FIELD_NAMES = frozenset(
-    {
-        "durationMs",
-        "avgDurationMs",
-        "maxDurationMs",
-        "dnsMs",
-        "tcpMs",
-        "tlsMs",
-        "requestHeaderMs",
-        "responseHeaderMs",
-        "responseBodyMs",
-        "launchDurationMs",
-        "backgroundDurationMs",
-        "phaseAppCreateMs",
-        "phaseContentProviderMs",
-        "phaseActivityCreateMs",
-        "phaseBeforeActivityMs",
-        "phaseActivityLifecycleMs",
-        "phaseFirstFrameMs",
-        "bottleneckDurationMs",
-        "bottleneckRatioPercent",
-        "dropRate",
-        "avgUploadLatencyMs",
-        "maxUploadLatencyMs",
-        "fps",
-        "refreshRate",
-        "averageFrameMs",
-        "maxFrameMs",
-    }
-)
-BOOLEAN_FIELD_NAMES = frozenset({"isSlow", "isColdStart"})
-
-
 def build_logs_request(events: Iterable[InboxEvent]) -> ExportLogsServiceRequest:
     """Build one OTLP request grouped by stable resource identity."""
     grouped: dict[tuple[str, ...], list[InboxEvent]] = defaultdict(list)
@@ -207,39 +148,16 @@ def _log_record(event: InboxEvent) -> LogRecord:
     )
 
 
-def _merge_prefixed(
-    target: dict[str, Any],
-    prefix: str,
-    source: object,
-    coerce_registered_fields: bool = False,
-) -> None:
-    """Preserve bounded SDK maps under collision-free namespaced attributes."""
+def _merge_prefixed(target: dict[str, Any], prefix: str, source: object) -> None:
+    """Preserve bounded SDK maps under collision-free namespaced attributes.
+
+    Normalization v4 already emits typed indexed attributes; values are exported
+    exactly as reviewed, without a second scalar-coercion pass.
+    """
     if not isinstance(source, Mapping):
         return
     for key, value in source.items():
-        target[f"{prefix}{key}"] = (
-            _coerce_field(str(key), value) if coerce_registered_fields else value
-        )
-
-
-def _coerce_field(key: str, value: Any) -> Any:
-    """Restore source-reviewed scalar types after compatibility stringification."""
-    if key in INTEGER_FIELD_NAMES:
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return value
-    if key in FLOAT_FIELD_NAMES:
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return value
-    if key in BOOLEAN_FIELD_NAMES and isinstance(value, str):
-        if value.lower() == "true":
-            return True
-        if value.lower() == "false":
-            return False
-    return value
+        target[f"{prefix}{key}"] = value
 
 
 def _key_values(values: Mapping[str, Any]) -> list[KeyValue]:

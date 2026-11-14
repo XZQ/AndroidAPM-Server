@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,13 +12,13 @@ from uuid import NAMESPACE_URL, uuid5
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.engine import make_url
 
 from androidapm_server.auth import generate_ingest_key
 from androidapm_server.config import get_settings
 from androidapm_server.db.inbox import insert_batch
-from androidapm_server.db.models import AuditLog, IngestKey, QueryKey, Tenant
+from androidapm_server.db.models import AuditLog, InboxEvent, IngestKey, QueryKey, Tenant
 from androidapm_server.db.session import get_session_factory
 from androidapm_server.domain import (
     ApmEvent,
@@ -42,10 +43,28 @@ TENANT_ID = "local-preview"
 TENANT_NAME = "Local Preview"
 APP_ID = "com.apm.sample.debug"
 ENVIRONMENT = "local"
+LEGACY_RELEASE = "1.9.0-legacy"
+_INCIDENT_EVENTS = frozenset(
+    {
+        ("crash", "java_crash"),
+        ("anr", "anr_detected"),
+        ("crash", "native_crash"),
+        ("crash", "tombstone_crash"),
+    }
+)
+# Occurrence must stay inside the default 900s late window so the preview demonstrates
+# a fresh release comparison instead of a permanently LATE baseline.
+_BUCKET_SECONDS = 10 * 60
 
 
 async def seed_local_preview() -> tuple[str, str, int, int]:
-    """Create short-lived local keys and one idempotent six-hour release fixture."""
+    """Create short-lived local keys and one deterministic ten-minute release fixture.
+
+    Prior synthetic generations are replaced in the same transaction so repeated runs
+    always demonstrate the same scenario instead of accumulating stale buckets. This
+    deletes only the script's own ``preview-`` rows in the local-only SQLite database;
+    real client batches keep the append-only dedup/replay contract.
+    """
     settings = get_settings()
     _assert_local_database(settings.environment, settings.database_url.get_secret_value())
     key_ring = InstallationHmacKeyRing.parse(
@@ -93,11 +112,20 @@ async def seed_local_preview() -> tuple[str, str, int, int]:
         )
         await session.flush()
 
-        bucket_seconds = 6 * 60 * 60
-        bucket_epoch = int(now.timestamp()) // bucket_seconds * bucket_seconds
-        occurrence_ms = (bucket_epoch - 5 * 60) * 1_000
-        # A contract revision gets a distinct immutable identity; never rewrite old replay hashes.
-        bucket_id = "v4b-" + datetime.fromtimestamp(bucket_epoch, tz=UTC).strftime("%Y%m%d%H")
+        await session.execute(
+            delete(InboxEvent).where(
+                InboxEvent.tenant_id == TENANT_ID,
+                InboxEvent.event_id.like("preview-%"),
+            )
+        )
+        bucket_epoch = int(now.timestamp()) // _BUCKET_SECONDS * _BUCKET_SECONDS
+        occurrence_ms = bucket_epoch * 1_000
+        # Identity binds the fixture content hash: any catalog/spec change gets a distinct
+        # immutable identity automatically, so reseeding never 409s on altered replay hashes.
+        bucket_id = (
+            f"v5-{_fixture_digest()}-"
+            + datetime.fromtimestamp(bucket_epoch, tz=UTC).strftime("%Y%m%d%H%M")
+        )
         result = await insert_batch(
             session,
             _metadata(f"local-preview-{bucket_id}"),
@@ -110,7 +138,7 @@ async def seed_local_preview() -> tuple[str, str, int, int]:
                 f"local-preview-v2-{bucket_id}",
                 schema_version="2",
                 protocol="protobuf-envelope-v2",
-                app_version="2.0.0",
+                app_version=LEGACY_RELEASE,
                 installation_id=f"synthetic-v2-installation-{bucket_id}",
                 release_quality=IdentityQuality.BATCH_DECLARED,
                 installation_quality=IdentityQuality.BATCH_DECLARED,
@@ -120,6 +148,25 @@ async def seed_local_preview() -> tuple[str, str, int, int]:
         )
         await session.commit()
     return query_plaintext, ingest_plaintext, result.inserted, compatibility.inserted
+
+
+def _fixture_digest() -> str:
+    """Fingerprint the fixture content so identity changes automatically with the catalog.
+
+    The probe uses a fixed bucket/timestamp; identity-derived values (event_id, occurrence
+    clock) are excluded or held constant, so the digest only moves when reviewed content
+    moves. Reseeding identical content inside one time bucket stays a deduplicated no-op.
+    """
+    shape = [
+        {
+            key: value
+            for key, value in event.model_dump(mode="json").items()
+            if key not in {"event_id", "timestamp"}
+        }
+        for event in _fixture_events("probe", 1)
+    ]
+    encoded = json.dumps(shape, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:10]
 
 
 def _fixture_events(bucket_id: str, timestamp_ms: int) -> list[ApmEvent]:
@@ -186,7 +233,10 @@ def _fixture_events(bucket_id: str, timestamp_ms: int) -> list[ApmEvent]:
             "new-anr",
             "anr",
             "anr_detected",
-            {"mainThreadStack": "at com.example.checkout.Cart.block(Cart.kt:120)"},
+            {
+                "mainThreadStack": "at com.example.checkout.Cart.block(Cart.kt:120)",
+                "durationMs": 1_200,
+            },
             "2.0.0",
             "new-b",
         ),
@@ -207,14 +257,20 @@ def _fixture_events(bucket_id: str, timestamp_ms: int) -> list[ApmEvent]:
             "new-b",
         ),
     ]
+    # Incident contracts carry explicit evidence-bearing specs below; the numeric sweep
+    # must not emit placeholder incidents without stacks/backtraces (they would pollute
+    # crash counts, fingerprint coverage and session rates).
     grouped: dict[tuple[str, str], dict[str, object]] = {}
     for contract in EVENT_CATALOG:
         if (contract.module, contract.name) not in {
             ("core", "session_start"),
             ("crash", "app_exit"),
+            *_INCIDENT_EVENTS,
         }:
             grouped[(contract.module, contract.name)] = {}
     for field in PERFORMANCE_FIELDS:
+        if (field.module, field.name) in _INCIDENT_EVENTS:
+            continue
         fields = grouped.setdefault((field.module, field.name), {})
         fields[field.field] = (
             0.1 if field.unit == "ratio" else -0.02 if field.unit == "ratio_delta" else 20
@@ -224,6 +280,8 @@ def _fixture_events(bucket_id: str, timestamp_ms: int) -> list[ApmEvent]:
         if field.sample_count_field is not None:
             fields[field.sample_count_field] = 20
     for dimension in DIMENSION_FIELDS:
+        if (dimension.module, dimension.name) in _INCIDENT_EVENTS:
+            continue
         fields = grouped[(dimension.module, dimension.name)]
         fields[dimension.field] = (
             True
@@ -232,7 +290,12 @@ def _fixture_events(bucket_id: str, timestamp_ms: int) -> list[ApmEvent]:
             if dimension.field_type == "integer"
             else dimension.allowed_values[0]
         )
-    grouped[("core", "sdk_health")].update({"emitCount": 100, "dropCount": 0, "dropRate": 0.0})
+    health = grouped[("core", "sdk_health")]
+    health.update({"emitCount": 100, "dropCount": 0, "dropRate": 0.0})
+    # Per-reason drop breakdowns must not contradict the zero drop counters.
+    for key in list(health):
+        if key.startswith(("dropReason", "dropPriority")):
+            health[key] = 0
     grouped[("network", "network_aggregate")].update(
         {"totalRequests": 100, "errorCount": 5, "successCount": 95}
     )

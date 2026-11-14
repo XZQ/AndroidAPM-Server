@@ -23,7 +23,6 @@ UNIT_MAP = {
     "events": "{event}",
     "frames": "{frame}",
     "fps": "{frame}/s",
-    "percent": "%",
     "ratio": "1",
     "ratio_delta": "1",
     "bytes": "By",

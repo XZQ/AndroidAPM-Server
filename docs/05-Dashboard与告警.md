@@ -44,7 +44,7 @@
 - `/apps/:appId/issues` 与 `/apps/:appId/issues/:fingerprint`：稳定指纹列表、发生趋势、版本/场景分布和权限受控样本。
 - `/apps/:appId/explore` 与 `/apps/:appId/events/:eventId`：investigator-only L1 检索、事件详情和显式审计后的 L2 raw。
 - `/apps/:appId/releases` 与 `/apps/:appId/quality`：人工发布决策和数据质量证据。
-- `/apps/:appId/performance`：13 个性能域的观测分布、版本差值、覆盖和趋势，缺失桶不连线；数据来自持久化 Inbox。
+- `/apps/:appId/performance`：14 个性能域及 core（SDK 自健康）的观测分布、版本差值、覆盖和趋势，缺失桶不连线；数据来自持久化 Inbox。
 - `/apps/:appId/alerts`：规则、触发/恢复实例、确认/静默、通知送达状态；admin 可写，其他角色只读。
 - `/apps/:appId/settings`：有效运行参数、管线与制品元数据；admin 另可管理应用名称、凭据、签名配置与审计。
 

@@ -177,7 +177,7 @@
                     "name": "A",
                     "signal": "logs",
                     "aggregations": [{ "expression": "p90(android.apm.field.launchDurationMs)" }],
-                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment AND android.apm.module = 'launch'" },
+                    "filter": { "expression": "service.name IN $app AND deployment.environment.name IN $environment AND android.apm.module = 'launch' AND android.apm.name IN ('cold_start', 'warm_start', 'hot_start')" },
                     "groupBy": [{ "name": "android.apm.name", "fieldDataType": "string", "fieldContext": "attribute" }]
                   }
                 }

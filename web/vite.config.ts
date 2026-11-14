@@ -12,6 +12,9 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    // An explicit origin keeps localStorage available across jsdom/node versions
+    // (opaque origins throw "localStorage is not available").
+    environmentOptions: { jsdom: { url: "http://localhost/" } },
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
     css: true,

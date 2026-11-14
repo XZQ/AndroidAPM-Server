@@ -2,7 +2,7 @@
 
 2026-11-02 当前 Web：性能、告警、设置、Trace 深链均使用真实 API；admin 包含 investigator 入口。会话率由服务端返回状态控制，不硬编码不可计算，也不补缺失。当前 SDK 尚未上报标准 session/device/OS/session_start/span v2，所以其真实数据通常不可计算；历史浏览器/SDK 验收记录不能替代本次证据。
 
-2026-10-14 本地统计扩展：总览/发布新增 Native、Tombstone 与标准运行会话率；Issue 可看设备/OS 及缺失覆盖；性能补齐 SDK 已采集事件；`/apps/:appId/traces` 与 `/traces/:traceId` 提供 investigator/admin 手动 Trace 列表、真实时间线与层级。旧数据保持缺失原因，所有深链使用同源 session/固定 scope。见 [统计契约](12-统计契约与口径.md) 与 [ADR 0011](adr/0011-运行会话统计与多信号导出.md)。
+2026-10-14 本地统计扩展：总览/发布新增 Native、Tombstone 与标准运行会话率；Issue 可看设备/OS 及缺失覆盖；性能补齐 SDK 已采集事件；`/apps/:appId/traces` 与 `/apps/:appId/traces/:traceId` 提供 investigator/admin 手动 Trace 列表、真实时间线与层级。旧数据保持缺失原因，所有深链使用同源 session/固定 scope。见 [统计契约](12-统计契约与口径.md) 与 [ADR 0011](adr/0011-运行会话统计与多信号导出.md)。
 
 > 实现基线：2026-10-13。性能、告警、设置和 Sample 本地接通详见 [本地产品功能](11-本地产品功能.md)。PostgreSQL/TLS/SigNoz 与真实通知仍需环境准备后现场验证，下文标明日期的浏览器记录属于历史证据。2026-11-07 更正：云端已上线 HTTPS 服务，但公网可达不等于上述现场验收通过，运行事实与待办见 [云端运行环境](13-云端运行环境.md)。
 

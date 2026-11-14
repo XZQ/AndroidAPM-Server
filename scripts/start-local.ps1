@@ -76,12 +76,20 @@ if (-not (Test-Path -LiteralPath $envPath)) {
         "APM_WEB_DIST_PATH=web/dist"
         "APM_ARTIFACT_STORAGE_PATH=.local/artifacts"
         "APM_SYMBOLIZATION_ENABLED=false"
+        # Synthetic preview only: three seeded installations cannot satisfy the
+        # production statistical gate (default 100). Never use this value in production.
+        "APM_QUERY_MIN_INSTALLATIONS=3"
     )
     Set-Content -LiteralPath $envPath -Value $lines -Encoding utf8
     Write-Host "Created ignored local configuration: $envPath"
 }
 
 Import-LocalEnvironment -Path $envPath
+# Older generated environments predate the preview installation gate; add it once.
+if (-not (Select-String -LiteralPath $envPath -Pattern "^APM_QUERY_MIN_INSTALLATIONS=" -Quiet)) {
+    Add-Content -LiteralPath $envPath -Value "APM_QUERY_MIN_INSTALLATIONS=3" -Encoding utf8
+    Import-LocalEnvironment -Path $envPath
+}
 Push-Location $repoRoot
 try {
     if (-not $SkipSync) {
@@ -132,7 +140,8 @@ try {
     }
     finally {
         foreach ($process in $workerProcesses) {
-            if (-not $process.HasExited) { Stop-Process -Id $process.Id }
+            try { if (-not $process.HasExited) { Stop-Process -Id $process.Id } }
+            catch { Write-Verbose "Worker process already exited: $($_.Exception.Message)" }
         }
     }
 }

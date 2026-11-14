@@ -1,6 +1,34 @@
 # AndroidAPM-Server 项目交接
 
-> 当前基线：2026-11-11，服务端唯一分支 `main`。本文区分“本机已验证”“公网只读已验证”和“需要外部环境验证”，历史条目保留当时事实。
+> 当前基线：2026-11-15，服务端唯一分支 `main`。本文区分“本机已验证”“公网只读已验证”和“需要外部环境验证”，历史条目保留当时事实。
+
+## 2026-11-15 全项目清扫轮（工具链/迁移/文档/前端残留）
+
+在 11-11 五区域深度 review 之上，本轮覆盖此前未深入的面：scripts 工具链、SigNoz 资产、proto 链、Alembic 与模型漂移、全量文档一致性、前端配置/CSS/依赖残留。两个子代理 + 主线自查，每条发现先核实再修。
+
+**已修复**：
+
+| 区域 | 问题 | 修复 |
+|---|---|---|
+| 依赖 | `hypothesis` 声明但全仓零使用 | 从 dev 组移除，`uv.lock` 同步（-44 行） |
+| 前端 CSS | 11-11 删除 5 个遗留组件后 CSS 未清理：styles.css 58 个、console.css 4 个孤儿类 | 精确 token 审计（含动态前缀/NavLink 自动类/三元类甄别）后剪枝，styles.css 987→557 行；CSS bundle 43.20→31.55 kB（gzip 8.72→6.85）；活规则逐字节保留 |
+| 前端 | 冒烟发现长原因码 `SESSION_IDENTITY_COVERAGE_INCOMPLETE` 溢出指标卡且无中文翻译（服务端 query.py 确实发出） | 补 REASON_LABELS；`.console-metric p` 加 `overflow-wrap: anywhere`；全量比对服务端 21 个 reason 码仅此一处遗漏 |
+| 本地预览 | fixture 系统性缺陷：6 小时桶锚定使预览**几乎总是 LATE**；手工 `v4b-` 前缀使目录漂移后 reseed 409；数值 sweep 生成**无证据占位事故**污染计数/指纹覆盖/会话率；V2 兼容行共享 2.0.0 永久阻塞新版本会话率；sdk_health dropReason 合计 440 与 dropCount=0 矛盾 | 10 分钟新鲜桶（<900s 迟到阈值）；内容哈希身份（目录/spec 变更自动换身份）；sweep 跳过事故契约（ANR durationMs 移入显式证据 spec）；V2 行独立 `1.9.0-legacy`；dropCount=0 时 dropReason/dropPriority 归零；同事务**替换**旧合成代（仅本地 SQLite 的 `preview-` 行，真实批次 append-only 契约不变） |
+| 本地预览 | 默认 min_installations=100 vs 3 个合成安装 → 会话率永不显示 | start-local.ps1 生成 `APM_QUERY_MIN_INSTALLATIONS=3`（仅预览，注释禁止生产使用），旧 env 幂等补写；顺带修 worker 清理 HasExited 竞态 |
+| OTLP | scalar-coercion 死层（~80 行，normalization v4 后唯一调用点从不启用）+ `UNIT_MAP["percent"]` 死映射 | 删除；`_merge_prefixed` 简化为直接导出已审核类型 |
+| SigNoz | Startup P90 过滤器 `module='launch'` 含 first_frame_rendered/launch_bottleneck，与"cold/warm/hot"描述不符；README compose 描述停留在三服务 | 过滤器限定三个 start 事件；README 更新为六服务 |
+| 文档 | 13 处不一致（2×P2）：docs/04 声称导出 OTel `exception.*` 与不存在的 `android.apm.error.fingerprint`；docs/04+01 声称 tombstone `COLLECTION_TIME` 标记（从未实现）；docs/03 `IDENTITY_MISSING`（实为 ABSENT）；`android.apm.thread`（实为 thread.name）；"13 性能域"过期×3；docs/00/01/09 "OTLP Metrics 未实现"已被 opt-in 实现取代；docs/08 Prometheus 名/标签错；backlog "4 MiB 绝对预算"与服务器 8 MiB 矛盾；docs/10 trace 深链路由错；HANDOFF 无日期历史列表 | 全部按代码事实更正；COLLECTION_TIME 选择**更正文档**而非新增标记（行为变更需独立决策，当前 tombstone 靠精确事件族隔离已安全）；历史列表标注"2026-09-12 顺序整改之前" |
+| 前端配置 | jsdom 无显式 origin，node 版本变化时 localStorage opaque-origin 抛错（子代理 node 26 复现 16/31 失败） | vite.config.ts 固定 `environmentOptions.jsdom.url` |
+
+**新增测试（+7）**：5 个 seed 场景回归（新鲜非 LATE、基线会话率 2/3 PRESENT、新版本 SDK-drop 门禁、事故 100% 指纹、V2 分离、drop 一致性、替换不累积）；proto 生成漂移守卫（grpcio-tools 重生成与已提交模块逐字节比对）；SigNoz 资产 field/base 属性与导出 allow-list 交叉校验。
+
+**子代理实证为干净（未改动）**：九版迁移 upgrade/downgrade base/upgrade 往返 + `alembic check` 无漂移 + 分级 backfill 21 断言（hash/HMAC/时钟不变）；proto 链重生成逐字节一致、跨仓校验器对真实 AndroidAPM 仓通过（仅注释与已审核 optional 7–9 差异）；SigNoz 版本钉一致、JSON 有效、属性均在 allow-list；README/AGENTS 全部本地链接与 CLI 子命令存在；docs/02/03/05/06/07/08/10/11/13 事实性声明逐条核对通过；ADR 0001–0011 与实现一致、无静默取代。
+
+**本轮验证（本机，2026-11-15）**：Ruff、mypy 63 files、`pytest --basetemp <短目录>` **586 passed / 1 skipped**、15 份文档与 head/版本一致性、凭据扫描、`git diff --check` 全过；前端 ESLint、TypeScript、**8 suites / 31 tests**、build（CSS 31.55 kB / gzip 6.85 kB，JS 319.53 kB / gzip 100.38 kB）全过。**真实浏览器冒烟**（本地预览服务 + 修复后 fixture）：总览基线 PRESENT、会话率按门禁渲染、SDK-drop 门禁正确；Issues **100% 指纹覆盖率**（修复前 47% DEGRADED）；性能页 243 契约行全渲染；1440px 与 390px 无页面横向溢出。前端门禁仍用 ZCode Electron 运行时（node v24.21.0，本机无 pnpm）；vite jsdom url 加固后跨 node 版本稳定。
+
+**有意延后（记录于云端待建设清单 2026-11-15 节）**：inbox 8 列 server-default 漂移（无运行时影响，对齐需迁移决策）；`registry_snapshot()` 无仓内引用但可能跨仓消费；check_production_config IPv6 字面量；SigNoz 同步分页（超大实例才相关）。
+
+**发布状态**：线上仍是旧镜像，本轮与 11-11 修复均待下次发布生效；服务器侧待办不变（docs/13 第 4、5 节）。
 
 ## 2026-11-11 深度 review 轮（五区域审查 + 逐条核实修复）
 
@@ -205,7 +233,7 @@ Query/BFF 新增 `GET /v1/query/issues/{fingerprint}`，在固定 scope 和有�
 
 以上是本地 UI、同源 API 与 synthetic 数据证据，仍不证明 PostgreSQL、SigNoz、TLS、通知或公网部署。既有 2026-08-28 迁移往返属于历史证据。
 
-## 已实现
+## 已实现（历史快照：2026-09-12 顺序整改之前，五版 schema 时期；当前状态以最新日期条目为准）
 
 - Python 3.11 + FastAPI/uv 工程、严格配置、结构化日志、Prometheus 端点。
 - `POST /v1/events`：Bearer ingest key、tenant/app/environment scope、schema/header/content 校验。

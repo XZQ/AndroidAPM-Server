@@ -27,7 +27,6 @@ dependencies = [
 dev = [
   "aiosqlite>=0.21,<1",
   "grpcio-tools>=1.73,<2",
-  "hypothesis>=6.135,<7",
   "mypy>=1.16,<2",
   "pytest>=8.4,<9",
   "pytest-asyncio>=1.0,<2",

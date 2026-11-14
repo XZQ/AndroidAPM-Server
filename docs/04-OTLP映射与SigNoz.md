@@ -59,18 +59,18 @@ tenant/app/environment 来自已认证凭据和服务端 scope，不采信 event
 
 `installation_id` 必须是宿主生成的匿名稳定安装标识，不得使用 user ID、广告 ID、IMEI、手机号或 Token。HMAC key 属于服务端 secret，按 tenant/domain 版本化；轮换必须支持有限重叠或离线重算，不能把明文写入审计日志。
 
-所有依赖身份的投影同时携带 `android.apm.identity.release_quality`、`android.apm.identity.installation_quality` 和缺失原因。只有 `OCCURRENCE_BOUND` release identity 才进入生产版本回归；只有已 HMAC 且 key version 明确的 installation 才进入安装分母。当前 V2 batch resource 可以驱动受控同版本 fixture，但不能通过 Dashboard filter 把它升级成 occurrence 事实。
+所有依赖身份的投影同时携带 `android.apm.release_identity_quality`、`android.apm.installation_identity_quality` 和缺失原因。只有 `OCCURRENCE_BOUND` release identity 才进入生产版本回归；只有已 HMAC 且 key version 明确的 installation 才进入安装分母。当前 V2 batch resource 可以驱动受控同版本 fixture，但不能通过 Dashboard filter 把它升级成 occurrence 事实。
 
 ## LogRecord 映射
 
 - `time_unix_nano`：规范化发生时间；`observed_time_unix_nano`：Gateway 接收时间。
 - severity：DEBUG/INFO/WARN/ERROR/FATAL 映射 OTel severity number/text。
 - body：稳定摘要 `<module>.<name>`，不把整个 raw payload 拼成字符串。
-- 基础 attributes：`android.apm.event_id,module,name,kind,priority,thread,scene,foreground,protocol,schema_version`。
+- 基础 attributes：`android.apm.event_id,module,name,kind,priority,thread.name,scene,foreground,protocol,schema_version`。
 - 注册 attributes：仅导出字段注册表允许的 fields/context/extras；高基数字段默认不进入可分组属性。
 - 原始规范化 JSON 保留在 inbox/受限详情，按 retention 和隐私策略处置；它不是任意用户可查询的公共属性包。
 
-Crash/ANR 使用 OTel exception 语义属性：`exception.type,message,stacktrace`，并附 `android.apm.error.fingerprint,symbolication.status`。未符号化堆栈与符号化结果分字段保存，禁止覆盖原始证据。
+Crash/ANR 导出 `android.apm.incident.fingerprint`（规范化事故指纹）、`android.apm.symbolization.status`，符号化成功后另附 `android.apm.crash.fingerprint`（符号指纹）。**不导出 OTel `exception.type/message/stacktrace`**：异常消息与堆栈属于高基数敏感证据，只留在 durable inbox 的 L2 审计读取路径。未符号化堆栈与符号化结果分字段保存，禁止覆盖原始证据。
 
 ## 客户端真实事件目录
 
@@ -131,7 +131,7 @@ V2 envelope 为 field 15 携带显式标量类型，Gateway 同时持久化值�
 
 - 现场 `java_crash`、`anr_detected` 等使用事件 timestamp 作为发生时间。
 - `app_exit` 在下一次启动采集，ApmEvent timestamp 是采集时刻；规范化发生时间必须优先取 `fields.exitTimestamp`，并保留 collection/received 两个时间。
-- `tombstone_crash` 当前没有可靠原始崩溃时间，标记 `timestamp_quality=COLLECTION_TIME`，不能悄悄放进精确版本发布窗口。
+- `tombstone_crash` 当前没有可靠原始崩溃时间，`timestamp_quality` 与其他事件一样为 `EVENT_DECLARED`（服务端尚未实现独立的 collection-time 标记）；它靠精确事件族单列统计，不进入现场 Crash 计数与 live session 事故分子，不能悄悄放进精确版本发布窗口。
 - alert 使用发生时间并设置允许迟到窗口；Collector/worker SLO 使用 received/observed 时间。两类时间不能混在同一延迟指标。
 - `java_crash` 与后续 `app_exit:CRASH`、`anr_detected` 与 `app_exit:ANR` 可能描述同一事故。没有客户端 incident ID 前，主指标只使用现场事件，退出证据单列；任何启发式关联都必须显示置信度且不能销毁原始记录。
 

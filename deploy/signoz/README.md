@@ -4,7 +4,7 @@ SigNoz is installed from the official [SigNoz Foundry](https://github.com/SigNoz
 
 For the current baseline, acquire Foundry `v0.2.13`, select its Docker Compose or Kubernetes casting, and pin SigNoz `v0.133.0`. Verify release checksums before running it. Configure the AndroidAPM worker's `APM_OTLP_LOGS_ENDPOINT` to the private OTLP/HTTP logs endpoint and keep that endpoint inaccessible to mobile clients.
 
-The local `compose.yaml` starts only Gateway, worker, and PostgreSQL. This separation keeps official SigNoz upgrades independent and makes it impossible for this repository to silently drift into a fork.
+The local `compose.yaml` starts PostgreSQL, the migration job, Gateway, export worker, symbolizer, and the alert evaluator — never SigNoz itself. This separation keeps official SigNoz upgrades independent and makes it impossible for this repository to silently drift into a fork.
 
 ## Dashboard and alert assets
 
