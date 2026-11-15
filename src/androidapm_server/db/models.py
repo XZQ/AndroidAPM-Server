@@ -175,6 +175,13 @@ class InboxEvent(Base):
             "occurrence_timestamp_ms",
             "id",
         ),
+        # Covering partial index for the capacity admission raw-byte SUM (migration 0010).
+        Index(
+            "ix_inbox_raw_bytes",
+            "payload_size_bytes",
+            postgresql_where=text("raw_pruned_at IS NULL"),
+            sqlite_where=text("raw_pruned_at IS NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BIGINT_PRIMARY_KEY, primary_key=True, autoincrement=True)
@@ -190,13 +197,22 @@ class InboxEvent(Base):
     variant: Mapped[str | None] = mapped_column(String(MAX_IDENTIFIER_BYTES))
     protocol: Mapped[str] = mapped_column(String(64), nullable=False)
     scope_identity_quality: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=IDENTITY_QUALITY_AUTHENTICATED
+        String(32),
+        nullable=False,
+        default=IDENTITY_QUALITY_AUTHENTICATED,
+        server_default=IDENTITY_QUALITY_AUTHENTICATED,
     )
     release_identity_quality: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=IDENTITY_QUALITY_ABSENT
+        String(32),
+        nullable=False,
+        default=IDENTITY_QUALITY_ABSENT,
+        server_default=IDENTITY_QUALITY_ABSENT,
     )
     installation_identity_quality: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=IDENTITY_QUALITY_ABSENT
+        String(32),
+        nullable=False,
+        default=IDENTITY_QUALITY_ABSENT,
+        server_default=IDENTITY_QUALITY_ABSENT,
     )
     installation_hmac: Mapped[str | None] = mapped_column(String(64))
     installation_hmac_key_version: Mapped[str | None] = mapped_column(String(32))
@@ -214,21 +230,34 @@ class InboxEvent(Base):
     occurrence_timestamp_ms: Mapped[int] = mapped_column(BIGINT_PRIMARY_KEY, nullable=False)
     collection_timestamp_ms: Mapped[int | None] = mapped_column(BIGINT_PRIMARY_KEY)
     timestamp_quality: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=TIMESTAMP_QUALITY_EVENT_DECLARED
+        String(32),
+        nullable=False,
+        default=TIMESTAMP_QUALITY_EVENT_DECLARED,
+        server_default=TIMESTAMP_QUALITY_EVENT_DECLARED,
     )
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    payload_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    payload_size_bytes: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
     raw_pruned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     normalization_version: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=NORMALIZATION_VERSION
+        Integer,
+        nullable=False,
+        default=NORMALIZATION_VERSION,
+        # Legacy floor from migration 0003 for raw SQL inserts; the ORM always
+        # supplies the current NORMALIZATION_VERSION. Mirrored so create_all and
+        # the migrated schema declare identical defaults.
+        server_default="1",
     )
-    normalized_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    normalized_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'")
+    )
     incident_fingerprint: Mapped[str | None] = mapped_column(String(64))
     raw_incident_fingerprint: Mapped[str | None] = mapped_column(String(64))
     native_identity_json: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON, nullable=False, default=list
+        JSON, nullable=False, default=list, server_default=text("'[]'")
     )
     request_id: Mapped[str] = mapped_column(String(64), nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

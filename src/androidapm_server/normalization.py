@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from androidapm_server.constants import (
@@ -202,11 +202,6 @@ _STACK_FIELDS = {
 }
 _ADDRESS_PATTERN = re.compile(r"(?:0x)?[0-9a-fA-F]{6,}")
 _LINE_NUMBER_PATTERN = re.compile(r":\d+\)")
-
-
-def registry_snapshot() -> list[dict[str, Any]]:
-    """Return a deterministic JSON-safe registry snapshot for drift tests and docs."""
-    return [asdict(definition) for definition in FIELD_REGISTRY]
 
 
 def field_availability(normalized: dict[str, Any], *, raw_pruned: bool) -> dict[str, str]:

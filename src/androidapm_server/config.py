@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     alert_poll_seconds: float = Field(default=30, ge=1, le=300)
     notification_channels_json: SecretStr = SecretStr("{}")
     notification_max_attempts: int = Field(default=5, ge=1, le=20)
+    alert_history_retention_days: int = Field(default=90, ge=1, le=3_650)
 
     @field_validator("remote_config_signing_private_key_b64", mode="before")
     @classmethod

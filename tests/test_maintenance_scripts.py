@@ -77,6 +77,23 @@ def test_ip_literal_public_host_is_accepted() -> None:
     assert not any("APM_DOMAIN" in failure for failure in config.validate(values))
 
 
+def test_ipv6_literal_public_host_is_accepted() -> None:
+    """IPv6 literals are valid public entry points despite having no dot."""
+    config = load("check_production_config")
+    for host in ("2001:db8::1", "[2001:db8::1]"):
+        values = valid_configuration()
+        values["APM_DOMAIN"] = host
+        assert not any("APM_DOMAIN" in failure for failure in config.validate(values)), host
+
+
+def test_bare_label_and_invalid_ip_hosts_are_rejected() -> None:
+    config = load("check_production_config")
+    for host in ("intranet", "2001:db8:::1"):
+        values = valid_configuration()
+        values["APM_DOMAIN"] = host
+        assert any("APM_DOMAIN" in failure for failure in config.validate(values)), host
+
+
 def test_weak_keys_and_insecure_cookies_are_rejected() -> None:
     config = load("check_production_config")
     values = valid_configuration()

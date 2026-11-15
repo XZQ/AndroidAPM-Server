@@ -11,7 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from androidapm_server.config import Settings
 from androidapm_server.constants import EVIDENCE_EXPIRED, EVIDENCE_MISSING
-from androidapm_server.db.models import AuditLog, InboxEvent, IngestRateWindow, SymbolizationJob
+from androidapm_server.db.models import (
+    AlertDelivery,
+    AlertInstance,
+    AlertRule,
+    AuditLog,
+    InboxEvent,
+    IngestRateWindow,
+    SymbolizationJob,
+)
 from androidapm_server.errors import ApiError
 from androidapm_server.metrics import RETENTION_EVENTS, RETENTION_LAST_SUCCESS
 from androidapm_server.normalization import field_availability
@@ -160,6 +168,32 @@ async def maintain_once(
                 )
             )
             quota_deleted = int(deleted.rowcount)  # type: ignore[attr-defined]
+            # Resolved alert episodes and their outbox rows would otherwise grow without
+            # bound. Open (unresolved) episodes are never pruned, so active rules keep
+            # their active_instance_id and firing evidence intact.
+            alert_cutoff = observed - timedelta(days=settings.alert_history_retention_days)
+            expired_alerts = (
+                select(AlertInstance.id, AlertRule.tenant_id)
+                .join(AlertRule, AlertRule.id == AlertInstance.rule_id)
+                .where(
+                    AlertInstance.resolved_at.is_not(None),
+                    AlertInstance.resolved_at <= alert_cutoff,
+                )
+                .order_by(AlertInstance.id)
+                .limit(settings.retention_batch_size)
+            )
+            alert_rows = (await session.execute(expired_alerts)).all()
+            alert_ids = [row.id for row in alert_rows]
+            alert_per_tenant: Counter[str] = Counter()
+            if alert_ids:
+                await session.execute(
+                    delete(AlertDelivery).where(AlertDelivery.instance_id.in_(alert_ids))
+                )
+                await session.execute(
+                    delete(AlertInstance).where(AlertInstance.id.in_(alert_ids))
+                )
+                for alert_row in alert_rows:
+                    alert_per_tenant[alert_row.tenant_id] += 1
             for tenant, count in per_tenant.items():
                 session.add(
                     AuditLog(
@@ -185,8 +219,23 @@ async def maintain_once(
                         details_json={"count": quota_deleted},
                     )
                 )
+            for tenant, count in alert_per_tenant.items():
+                session.add(
+                    AuditLog(
+                        tenant_id=tenant,
+                        actor="worker:retention",
+                        action="alert.history.prune",
+                        object_type="alert_instances",
+                        result="success",
+                        details_json={
+                            "count": count,
+                            "retention_days": settings.alert_history_retention_days,
+                        },
+                    )
+                )
             await session.commit()
     RETENTION_EVENTS.labels("raw_pruned").inc(len(rows))
     RETENTION_EVENTS.labels("quota_expired").inc(quota_deleted)
+    RETENTION_EVENTS.labels("alert_history_pruned").inc(len(alert_ids))
     RETENTION_LAST_SUCCESS.set(observed.timestamp())
     return len(rows), quota_deleted

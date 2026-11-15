@@ -2,6 +2,31 @@
 
 > 当前基线：2026-11-15，服务端唯一分支 `main`。本文区分“本机已验证”“公网只读已验证”和“需要外部环境验证”，历史条目保留当时事实。
 
+## 2026-11-15 遗留项深度核实轮（逐项确认 + 修复确证问题）
+
+对清扫轮与 11-11 轮记录的"有意延后"清单逐项深度核实，**确证为问题的修复，非问题/需外部决策的保留并说明证据**。
+
+**确证并修复**：
+
+| 项 | 核实结论 | 修复 |
+|---|---|---|
+| `registry_snapshot()` | 服务端仓与 AndroidAPM 客户端仓**均零引用**（客户端根本不 import 服务端模块）→ 确证死代码 | 删除函数及仅其使用的 `asdict` 导入 |
+| check_production_config IPv6 | `"." not in domain` 拒绝合法 IPv6 字面量，与"接受 IP 字面量"注释矛盾 → 确证不一致 | 改用 `ipaddress.ip_address` 解析（IPv4/IPv6，含括号形式），主机名仍需点号；补 IPv6 接受/裸标签与非法 IP 拒绝回归 |
+| inbox 8 列 server-default 漂移 | 迁移 0003/0005 设 DB 默认值而模型仅 Python 默认值，`create_all` 与迁移库 DDL 不一致 → 确证（无运行时影响，ORM 总供值） | 模型镜像迁移现状的 8 个 `server_default`（零 DB 变更，`alembic check` 仍干净）；normalization_version 注明 '1' 为迁移遗留 floor、ORM 供当前版本 |
+| 告警实例/送达无保留 | `maintain_once` 从不清理 `alert_instances`/`alert_deliveries`，长期运行无界增长 → 确证 operational 问题 | 新增 `APM_ALERT_HISTORY_RETENTION_DAYS=90`（1–3650），保留循环按 batch 清理**已解决**实例及其 outbox（先删送达再删实例，不依赖 FK 级联），按 tenant 审计 `alert.history.prune` + 计数指标；未解决/触发中实例永不清理，`active_instance_id` 安全；补 2 回归 |
+| 容量准入 raw 字节 SUM | `check_inbox_capacity` 在全局 advisory lock 下对未清理行做无覆盖索引 SUM，随 inbox 线性扫描 → 确证效率缺陷 | append-only 迁移 `20261115_0010` 增部分覆盖索引 `ix_inbox_raw_bytes (payload_size_bytes) WHERE raw_pruned_at IS NULL`（PG index-only scan），模型同步声明；临时 SQLite 实证 upgrade→check→downgrade -1→upgrade→downgrade base→upgrade→check 全干净；补索引守卫回归 |
+
+**核实后保留（非当前问题或需外部决策，证据见云端待建设清单）**：
+- **dead-letter 重放工具**：raw 在保留期内可恢复（手动 DB），不变量已满足；缺的是 admin 审计 requeue 能力，属功能增强而非缺陷。
+- **tombstone COLLECTION_TIME 标记**：核实 tombstone 靠精确事件族隔离（`HISTORICAL_EVENTS`、独立 `native_tombstone_events` metric、不进 live session 分子），缺失标记仅元数据层面、**非计数错误**；清扫轮已更正文档。实现独立标记属行为变更，需单独决策。
+- **SigNoz 同步分页**：仅超大实例有重复创建风险，staging 规模不构成问题；无 live 实例不宜盲改外部 API 分页。
+- **FLOAT 规范文本 / Native 指纹 signal 编码**：分别受重放兼容不变量与 ADR 0009 指纹版本化约束，不能静默改。
+- **控制台默认版本 API / 符号化 resolution 退避 / Actions SHA 钉扎**：功能增强或推测性加固，非当前缺陷。
+
+**本轮验证（本机）**：Ruff、mypy 63 files、`pytest --basetemp <短目录>` **591 passed / 1 skipped**、15 份文档（head 更新为 `20261115_0010`，AGENTS/README/docs11 现状同步，历史条目与 ADR 不改）、凭据扫描、`git diff --check` 全过；迁移往返与 autogenerate 实证干净。前端本轮无改动。
+
+**发布状态**：新增迁移 0010 与告警保留需随下次发布生效；发布前先 `alembic upgrade head`（0010 仅性能索引，可独立 downgrade）。线上仍是旧镜像。
+
 ## 2026-11-15 全项目清扫轮（工具链/迁移/文档/前端残留）
 
 在 11-11 五区域深度 review 之上，本轮覆盖此前未深入的面：scripts 工具链、SigNoz 资产、proto 链、Alembic 与模型漂移、全量文档一致性、前端配置/CSS/依赖残留。两个子代理 + 主线自查，每条发现先核实再修。
@@ -26,7 +51,7 @@
 
 **本轮验证（本机，2026-11-15）**：Ruff、mypy 63 files、`pytest --basetemp <短目录>` **586 passed / 1 skipped**、15 份文档与 head/版本一致性、凭据扫描、`git diff --check` 全过；前端 ESLint、TypeScript、**8 suites / 31 tests**、build（CSS 31.55 kB / gzip 6.85 kB，JS 319.53 kB / gzip 100.38 kB）全过。**真实浏览器冒烟**（本地预览服务 + 修复后 fixture）：总览基线 PRESENT、会话率按门禁渲染、SDK-drop 门禁正确；Issues **100% 指纹覆盖率**（修复前 47% DEGRADED）；性能页 243 契约行全渲染；1440px 与 390px 无页面横向溢出。前端门禁仍用 ZCode Electron 运行时（node v24.21.0，本机无 pnpm）；vite jsdom url 加固后跨 node 版本稳定。
 
-**有意延后（记录于云端待建设清单 2026-11-15 节）**：inbox 8 列 server-default 漂移（无运行时影响，对齐需迁移决策）；`registry_snapshot()` 无仓内引用但可能跨仓消费；check_production_config IPv6 字面量；SigNoz 同步分页（超大实例才相关）。
+**有意延后**：inbox 8 列 server-default 漂移、`registry_snapshot()` 死代码、check_production_config IPv6、告警历史保留、容量 SUM 索引——这些已在同日"遗留项深度核实轮"确证并修复（见上）。SigNoz 同步分页（超大实例才相关）等其余项保留，记录于云端待建设清单。
 
 **发布状态**：线上仍是旧镜像，本轮与 11-11 修复均待下次发布生效；服务器侧待办不变（docs/13 第 4、5 节）。
 

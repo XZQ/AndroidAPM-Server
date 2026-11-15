@@ -26,6 +26,16 @@ from androidapm_server.query import build_issue_detail, field_states
 from androidapm_server.query_auth import QueryPrincipal
 
 
+def test_capacity_raw_byte_sum_has_covering_partial_index() -> None:
+    """Migration 0010's partial index must stay declared so admission stays index-only."""
+    indexes = {index.name: index for index in InboxEvent.__table__.indexes}
+    assert "ix_inbox_raw_bytes" in indexes
+    index = indexes["ix_inbox_raw_bytes"]
+    assert [column.name for column in index.columns] == ["payload_size_bytes"]
+    assert index.dialect_options["postgresql"]["where"] is not None
+    assert index.dialect_options["sqlite"]["where"] is not None
+
+
 async def test_retention_is_bounded_idempotent_and_keeps_replay_protection() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as connection:

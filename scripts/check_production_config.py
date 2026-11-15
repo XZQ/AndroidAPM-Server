@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import ipaddress
 import json
 import os
 import sys
@@ -61,6 +62,16 @@ def decode_key(value: str) -> bytes | None:
         return base64.b64decode(value, validate=True)
     except (ValueError, binascii.Error):
         return None
+
+
+def _is_public_host(domain: str) -> bool:
+    """Accept a real IP literal (IPv4/IPv6) or a dotted hostname, not a bare label."""
+    candidate = domain[1:-1] if domain.startswith("[") and domain.endswith("]") else domain
+    try:
+        ipaddress.ip_address(candidate)
+    except ValueError:
+        return "." in candidate
+    return True
 
 
 def validate(values: dict[str, str]) -> list[str]:
@@ -120,10 +131,10 @@ def _validate_infrastructure(values: dict[str, str], failures: list[str]) -> Non
         not database_url.startswith("postgresql") or is_placeholder(database_url)
     ):
         failures.append("APM_DATABASE_URL: override must point at PostgreSQL, not SQLite")
-    # APM_DOMAIN is Caddy's site address. A public IP literal is accepted: the
-    # existing IP-only deployment has no DNS name, and an IP satisfies this check.
-    domain = values.get("APM_DOMAIN", "")
-    if is_placeholder(domain) or "." not in domain:
+    # APM_DOMAIN is Caddy's site address. A public IP literal (IPv4 or IPv6) is
+    # accepted: an IP-only deployment has no DNS name. Hostnames must contain a dot.
+    domain = values.get("APM_DOMAIN", "").strip()
+    if is_placeholder(domain) or not _is_public_host(domain):
         failures.append("APM_DOMAIN: missing or example-only")
     endpoint = values.get("APM_OTLP_LOGS_ENDPOINT", "")
     if not endpoint.startswith("https://") or is_placeholder(endpoint):

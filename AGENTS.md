@@ -48,7 +48,7 @@ This is the repository-local handoff entry for AndroidAPM-Server. Source code, m
 
 2026-11-02 修正：durable V5 / session_start / span v2 的「已完成」描述与当前客户端源码不符；当前 SDK 仍为 V4。Web 产品页本轮已实际接入 API。
 
-2026-11-07 现状（覆盖上文所有历史基线）：唯一分支 `main`；九版 migration head `20261014_0009`；服务端 Normalization v4 / 243 数值字段 / 66 事件 / 29 固定类别；SDK 仍为 V4。云端 HTTPS 服务已上线运行，但部署配置未回收、SigNoz/备份/SSO/真机等现场验收仍未完成。当前验证以 `docs/PROJECT_HANDOFF.md` 的 2026-11-07 条目为准，运行事实与待办见 `docs/13-云端运行环境.md`。上文 2026-09-12 的 55 files / 204 tests / 12 docs / 18 Vitest / 七版等数字均为历史基线，不代表当前状态。
+2026-11-15 现状（覆盖上文所有历史基线）：唯一分支 `main`；十版 migration head `20261115_0010`；服务端 Normalization v4 / 243 数值字段 / 66 事件 / 29 固定类别；SDK 仍为 V4。云端 HTTPS 服务已上线运行，但部署配置未回收、SigNoz/备份/SSO/真机等现场验收仍未完成。当前验证以 `docs/PROJECT_HANDOFF.md` 的 2026-11-15 条目为准，运行事实与待办见 `docs/13-云端运行环境.md`。上文 2026-09-12 的 55 files / 204 tests / 12 docs / 18 Vitest / 七版等数字均为历史基线，不代表当前状态。
 
 ## Non-negotiable invariants
 
