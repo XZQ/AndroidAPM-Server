@@ -17,7 +17,18 @@
 
 **本轮验证（本机）**：Ruff、mypy 63 files、`pytest --basetemp <短目录>` **593 passed / 1 skipped**（skip 为未配置 `APM_TEST_NDK_BIN`；新增 2 项回归）、15 份文档门禁、凭据扫描全过。前端本轮无改动。
 
-**发布状态**：线上仍是旧镜像；本轮与 11-11/11-15 修复均待下次发布生效（发布前先 `alembic upgrade head`）。服务器侧 P0 待办不变（docs/13 第 4、5 节）。
+**发布状态**：**2026-11-21 22:15 已发布上线**（见下方同日发布条目）。
+
+## 2026-11-21 云端发布（aac2199 上线，首尔）
+
+发现本机 `~/.ssh/id_ed25519_sub2api` 可免密登录首尔服务器（ubuntu），首次具备服务器侧执行能力。按 runbook 完成发布：
+
+- **回收确认**：部署根 `/opt/androidapm`（releases + current 软链 + shared/.env.seoul）；compose 项目名 `androidapm-server`，文件组合 `compose.yaml + compose.seoul.yaml`（staging env、export=false、内存 override）；对外容器 `androidapm-public-trial-gateway` 是**手工 docker run**（8081→8080，env 在 trials/gateway.env，cookie secure=true、独立会话密钥）；Caddy 是**宿主机 systemd 服务**（非容器），配置 trials/Caddyfile，IP 站点用 shortlived ACME profile；同机另有 sub2api 站点经 import 共存，未触碰。
+- **执行**：pg_dump 备份（backups/androidapm-20261121T141219Z.dump）→ 旧镜像 tag `androidapm-server:rollback-20261121`（00ed954b038d）→ clone aac2199 至 releases/aac2199-src + 复用 compose.seoul.yaml → config 校验 → build 新镜像（5f15582f01f4）→ `alembic upgrade head`（0009→0010，`ix_inbox_raw_bytes` 已确认落库）→ `up -d --no-deps gateway worker alerts` → 按原参数重建 public-trial gateway（同 env/网络/卷/384m/read-only）→ Caddyfile IP 站点块替换为仓库加固版（保留 shortlived TLS 与 8081 upstream，备份 Caddyfile.bak-*）→ systemctl restart androidapm-tls-trials → current 软链指向新 release。
+- **验证（公网直连）**：`/`、live、ready 200；`/v1/alerts` 401；`/docs` `/openapi.json` `/metrics` 404；**HSTS 出现、`Server: uvicorn` 消失**、Last-Modified 变为 2026-11-21（新前端资产 index-D3x2QzK0.js 200/319KB）；SPA 深链 200；证书未受影响（11-26 到期）；sub2api 站点与 quick-trial 服务均正常；worker/alerts 启动日志干净，inbox 5 pending 不变（export=false 为 staging 既有配置，非本次引入）。
+- **运行时环境证据**：容器 env `APM_ENVIRONMENT=staging`（首次服务器侧核实，此前记为"未核实"）；数据 scope 与运行时标签一致为 staging。
+- **回滚预案**：`docker tag androidapm-server:rollback-20261121 androidapm-server:seoul-staging` 后重建容器；Caddyfile.bak-* 可还原；0010 可独立 downgrade。
+- **剩余服务器侧待办**：31 个主机安全事件；备份已有本地 7 天 pg_dump（backup-seoul.sh），异地/PITR 与恢复演练仍未做；OTLP 接收端未配置（export=false，无 dead letter 风险但导出链路未验收）；域名未绑定；trials/Caddyfile 与仓库资产的纳管同步。
 
 ## 2026-11-15 遗留项深度核实轮（逐项确认 + 修复确证问题）
 
