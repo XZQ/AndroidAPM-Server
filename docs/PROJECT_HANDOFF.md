@@ -2,6 +2,15 @@
 
 > 当前基线：2026-11-21，服务端唯一分支 `main`。本文区分“本机已验证”“公网只读已验证”和“需要外部环境验证”，历史条目保留当时事实。
 
+## 2026-11-21 晚续轮（跨仓审计 → statusCode 契约 → 异地备份 → 客户端 strict V3 → 二次发布）
+
+- **跨仓覆盖审计**（客户端 AndroidAPM develop `4530fcb`）：客户端 65 个固定 module/name 全部被服务端 66 事件目录覆盖（66 = 65 + 预留 core/session_start）；字符串形态数值兼容；dropReason 22 枚举一致；`threshold` 为配置回显有意不注册；`statusCode` 原仅 raw → 本轮注册。
+- **statusCode 契约**（服务端 `d1cde11`，已推送、CI success、**已发布上线**）：network_request/network_error/network_phase 各增 integer `statusCode`（unit http_status，客户端 -1/0 哨兵有效，0 显示 ZERO），数值契约 243→246、network 18→21、integer 86→89；OTLP UNIT_MAP 补 http_status→1；+1 回归；docs/12/README/AGENTS 同步。门禁：Ruff、mypy 63 files、pytest **597 passed / 1 skipped**、15 docs、secret scan 全过。二次发布沿用首次流程（fetch→build→up gateway/worker/alerts→重建 public gateway），公网 200、ready 200，旧镜像 tag rollback-20261121b。
+- **异地备份闭环**：服务器 cron 每日 03:17 本地 pg_dump（保留 7 天）已在跑；本轮新鲜备份拉回本机 `.local/backups/androidapm-20261121T150734Z.dump`（SHA256 与服务器一致），并在服务器临时库 `restore_check` **实际 pg_restore 成功**（alembic 0010、inbox 5 行、query_keys 5 行核对后删库清理）。异地副本 + 恢复演练两项首次闭环；PITR/自动化异地同步仍待建设。
+- **客户端 strict V3 落地**（AndroidAPM develop `0f68241`，已推送）：sample app 新增构建期 opt-in（`-Papm.ingestKey=`，不进源码）→ PRODUCTION_STRICT + PROTOBUF_ENVELOPE_V3 + occurrence 身份（BuildConfig 版本/变体 + 一次性匿名安装 UUID 本地持久化）+ Bearer ingest key + staging resource context；无 key 时保持 logcat/soak 原行为。`:apm-sample-app:compileDebugKotlin` BUILD SUCCESSFUL（JBR 25 / Java 17 toolchain）。
+- **联调凭据已创建**（90 天，scope seoul-staging / com.apm.sample.debug / staging）：ingest key `753ced7df926059b97` + 配套 admin query key `6df5cc928f2b8ea7f6`（会话实测 200）；明文仅在 `.local/SAMPLE-V3-CREDENTIALS.md`。**真机安装上报仍未执行**（需设备/模拟器），是下一步验收动作。
+- 剩余：真机 V3 上报 E2E、OTLP 接收端与导出验收、31 主机安全事件、PITR/自动异地备份、绑域名、客户端 V5/session_start（会话率前提）、告警空窗口恢复语义与 audit_logs 留存决策。
+
 ## 2026-11-21 审查轮（两项确证修复 + 四项决策记录）
 
 主线复核告警链路、保留清理、导出 worker、认证/CSRF、前端 API 层与部署资产。核心不变量（去重、fencing、CSRF 绑定、HMAC、缺失≠零、告警保留只清已解决实例、11-15 五项修复无回归）复核成立。
