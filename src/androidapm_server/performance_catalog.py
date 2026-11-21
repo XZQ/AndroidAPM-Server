@@ -125,6 +125,16 @@ PERFORMANCE_FIELDS: tuple[PerformanceField, ...] = (
             ("responseSize", "bytes", "响应大小"),
         ),
     ),
+    # statusCode is a bounded low-cardinality HTTP observation, not a duration/count.
+    # The client uses -1 for transport failure and 0 for "no response seen"; both are
+    # valid reported values. Unit "http_status" is outside the non-negative physical
+    # bound set, so those sentinel values are preserved instead of marked INVALID.
+    *(
+        PerformanceField(
+            "network", name, "statusCode", "http_status", "HTTP 状态码", field_type="integer"
+        )
+        for name in ("network_request", "network_error", "network_phase")
+    ),
     *_fields(
         "network",
         ("network_phase",),

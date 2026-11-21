@@ -32,6 +32,7 @@ UNIT_MAP = {
     "cores": "{core}",
     "depth": "{level}",
     "objects": "{object}",
+    "http_status": "1",
 }
 # The catalog already includes SDK health, including its availability/sample gates.
 # Reconstructing those fields from normalization duplicates points and loses the gates.

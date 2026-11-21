@@ -352,3 +352,26 @@ def test_fps_severity_uses_bounded_integer_categories_and_preserves_unknown() ->
     )
     assert result.counts == {"0": 1, "1": 0, "2": 0, "3": 1}
     assert result.unknown_count == 1 and result.invalid_count == 1
+
+
+def test_network_status_code_preserves_client_sentinels_and_rejects_non_integers() -> None:
+    """statusCode is a registered integer observation on all three network events.
+
+    The client reports -1 for transport failure and 0 for "no response seen"
+    (ApmEventListener STATUS_CODE_NETWORK_ERROR / STATUS_CODE_UNKNOWN). These are
+    valid reported values, not physical negatives to invalidate; fractional,
+    boolean, and non-canonical string values must stay INVALID.
+    """
+    for name in ("network_request", "network_error", "network_phase"):
+        field = PERFORMANCE_BY_ID[f"network.{name}.statusCode"]
+        assert field.field_type == "integer"
+        for code in (200, 404, 503, -1, 0):
+            summary = summarize([row("network", name, {"statusCode": code})], field)
+            expected = "ZERO" if code == 0 else "PRESENT"
+            assert summary.state == expected, (name, code, summary.state)
+            assert summary.mean == float(code)
+        for bad in (1.5, True, "20x"):
+            summary = summarize([row("network", name, {"statusCode": bad})], field)
+            assert summary.invalid_count == 1 and summary.mean is None
+        missing = summarize([row("network", name, {"durationMs": 10})], field)
+        assert missing.state == "UNAVAILABLE" and missing.missing_count == 1

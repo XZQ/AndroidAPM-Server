@@ -13,7 +13,7 @@
 | 技术栈 | Python 3.11 / FastAPI / SQLAlchemy 2；`uv` 锁后端依赖，`pnpm` 锁前端依赖 |
 | 持久化 | PostgreSQL 是生产 inbox；SQLite 只用于兼容性测试与本地预览 |
 | 迁移 | Alembic 十版，head `20261115_0010`，发布前先升级 |
-| 统计口径 | Normalization v4：243 数值字段 / 66 精确事件 / 29 固定类别（以 [统计契约](docs/12-统计契约与口径.md) 为准） |
+| 统计口径 | Normalization v4：246 数值字段 / 66 精确事件 / 29 固定类别（以 [统计契约](docs/12-统计契约与口径.md) 为准） |
 | SDK 契约 | 客户端仍是 durable **V4**；服务端字段 7–9 为向后兼容 optional 扩展，标准 `session_start` / device / OS / span v2 尚未由客户端上报 |
 | 云端 | 首尔轻量应用服务器上的 HTTPS 服务已上线，运行事实见 [云端运行环境](docs/13-云端运行环境.md) |
 | 验收 | SigNoz 真实接收、通知渠道、备份/PITR、SSO/KMS、真机采集与容量/soak **仍未通过** |

@@ -50,6 +50,8 @@ This is the repository-local handoff entry for AndroidAPM-Server. Source code, m
 
 2026-11-15 现状（覆盖上文所有历史基线）：唯一分支 `main`；十版 migration head `20261115_0010`；服务端 Normalization v4 / 243 数值字段 / 66 事件 / 29 固定类别；SDK 仍为 V4。云端 HTTPS 服务已上线运行，但部署配置未回收、SigNoz/备份/SSO/真机等现场验收仍未完成。当前验证以 `docs/PROJECT_HANDOFF.md` 的 2026-11-15 条目为准，运行事实与待办见 `docs/13-云端运行环境.md`。上文 2026-09-12 的 55 files / 204 tests / 12 docs / 18 Vitest / 七版等数字均为历史基线，不代表当前状态。
 
+2026-11-21 现状（覆盖上文）：`aac2199` 已发布至首尔云端（迁移 head 0010 已生效，HSTS/去 Server 头已上线，运行时 env=staging、export=false）；部署配置已回收（docs/13 第 0 节），本机具备 SSH 通道。跨仓审计后新增 3 个 network `statusCode` integer 契约，数值契约 243→**246**（threshold 为配置回显有意不注册）；客户端 65 固定事件全覆盖。当前验证以 `docs/PROJECT_HANDOFF.md` 2026-11-21 条目为准。
+
 ## Non-negotiable invariants
 
 - A `2xx` ingest response means the complete batch was durably committed to the inbox.
