@@ -318,7 +318,18 @@ async def deliver_once(
     if delivery is None:
         return False
     status, error = "FAILED", "CHANNEL_UNCONFIGURED"
-    channel = configured_channels(settings).get(delivery.channel)
+    try:
+        channel = configured_channels(settings).get(delivery.channel)
+    except ApiError:
+        # A malformed server-side channel map is an operator configuration error,
+        # not a property of this outbox row. Letting the 503 escape would abort the
+        # whole delivery cycle after the claim committed: the row would sit in
+        # SENDING until its lease expired, then be re-claimed and burn another
+        # attempt every cycle until RETRY_EXHAUSTED, and every other pending
+        # notification in the cycle would be skipped. Fail this row closed and
+        # keep the cycle alive; the budget still bounds repeated misconfiguration.
+        logger.warning("alert_channel_configuration_invalid", channel=delivery.channel)
+        channel = None
     if channel is not None:
         try:
             # Server-configured destinations only; never follow redirects to another host.

@@ -23,6 +23,26 @@ def test_compose_contains_separate_durable_runtime_components() -> None:
     assert "artifact-data:/var/lib/androidapm/artifacts" in services["symbolizer"]["volumes"]
 
 
+def test_compose_forwards_every_documented_alert_setting() -> None:
+    """Settings documented in .env.example must reach containers through compose.
+
+    Regression: APM_ALERT_HISTORY_RETENTION_DAYS existed in Settings and docs but
+    was absent from the compose environment anchor, so operators could not tune
+    alert retention in a Docker deployment without editing compose itself.
+    """
+    compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
+    environment = compose["services"]["gateway"]["environment"]
+    example = (ROOT / ".env.example").read_text(encoding="utf-8")
+    for name in (
+        "APM_ALERT_POLL_SECONDS",
+        "APM_NOTIFICATION_CHANNELS_JSON",
+        "APM_NOTIFICATION_MAX_ATTEMPTS",
+        "APM_ALERT_HISTORY_RETENTION_DAYS",
+    ):
+        assert name in environment, f"{name} is not forwarded to containers"
+        assert f"{name}=" in example, f"{name} is missing from .env.example"
+
+
 def test_container_drops_root_and_signoz_versions_are_pinned() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     versions = (ROOT / "deploy" / "signoz" / "VERSIONS.env").read_text(encoding="utf-8")

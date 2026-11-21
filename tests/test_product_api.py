@@ -15,6 +15,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from pydantic import SecretStr
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -374,6 +375,80 @@ async def test_alert_firing_dedup_unknown_recovery_ack_and_retry_outbox(product:
     async with factory() as session:
         assert (await session.get(AlertDelivery, 1)).status == "DELIVERED"
         assert (await session.scalar(select(func.count()).select_from(AlertInstance))) == 1
+
+
+async def test_invalid_channel_map_fails_one_row_without_aborting_delivery(product: Any) -> None:
+    """A malformed channel map must not escape deliver_once after the claim committed.
+
+    Regression: the ApiError(503) used to abort the whole cycle, leaving the claimed
+    row in SENDING until lease expiry and skipping every other pending notification;
+    each cycle then burned one attempt until RETRY_EXHAUSTED. The row must instead
+    fail closed as CHANNEL_UNCONFIGURED while later rows still deliver.
+    """
+    client, factory, keys, settings = product
+    created = await client.post(
+        "/v1/alerts/rules",
+        json={"name": "Crash", "metric": "crash.count", "threshold": 0, "channel": "test"},
+        headers=auth(keys),
+    )
+    assert created.status_code == 201, created.text
+    await emit(
+        factory, module="crash", name="java_crash", values=[{"stackTrace": "at app.fn(Main.kt:1)"}]
+    )
+    assert (await client.post("/v1/alerts/evaluate", headers=auth(keys))).status_code == 200
+    async with factory() as session:
+        instance = await session.scalar(select(AlertInstance))
+        assert instance is not None
+        session.add(
+            AlertDelivery(
+                instance_id=instance.id,
+                transition="RESOLVED",
+                channel="test",
+                status="PENDING",
+                next_attempt_at=NOW - timedelta(seconds=1),
+                payload_json={"probe": "second-row"},
+            )
+        )
+        await session.execute(
+            update(AlertDelivery)
+            .where(AlertDelivery.transition == "FIRING")
+            .values(next_attempt_at=NOW - timedelta(seconds=1))
+        )
+        await session.commit()
+    settings.notification_channels_json = SecretStr("{not-json")
+    requests: list[httpx.Request] = []
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(204)
+
+    async with AsyncClient(transport=httpx.MockTransport(transport)) as outbound:
+        # Both rows are processed inside one call sequence; neither raises.
+        assert await deliver_once(factory, settings, outbound)
+        assert await deliver_once(factory, settings, outbound)
+        assert not await deliver_once(factory, settings, outbound)
+    assert requests == []
+    async with factory() as session:
+        rows = (await session.scalars(select(AlertDelivery).order_by(AlertDelivery.id))).all()
+        assert [row.status for row in rows] == ["FAILED", "FAILED"]
+        assert all(row.last_error == "CHANNEL_UNCONFIGURED" for row in rows)
+        assert all(row.lease_owner is None and row.lease_expires_at is None for row in rows)
+    # Once the operator fixes the map, a fresh transition still delivers normally.
+    settings.notification_channels_json = SecretStr('{"test":{"url":"http://127.0.0.1:9999/hook"}}')
+    async with factory() as session:
+        # Re-arm one failed row in place; the unique (instance, transition, channel)
+        # constraint forbids inserting a second FIRING row for the same episode.
+        row = await session.get(AlertDelivery, 1)
+        assert row is not None
+        row.status, row.attempt_count = "PENDING", 0
+        row.next_attempt_at = NOW - timedelta(seconds=1)
+        await session.commit()
+    async with AsyncClient(transport=httpx.MockTransport(transport)) as outbound:
+        assert await deliver_once(factory, settings, outbound)
+    assert len(requests) == 1
+    async with factory() as session:
+        row = await session.get(AlertDelivery, 1)
+        assert row is not None and row.status == "DELIVERED"
 
 
 async def test_count_alerts_stay_evaluable_when_window_exceeds_row_budget(product: Any) -> None:

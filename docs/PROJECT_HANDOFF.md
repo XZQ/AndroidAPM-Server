@@ -1,6 +1,23 @@
 # AndroidAPM-Server 项目交接
 
-> 当前基线：2026-11-15，服务端唯一分支 `main`。本文区分“本机已验证”“公网只读已验证”和“需要外部环境验证”，历史条目保留当时事实。
+> 当前基线：2026-11-21，服务端唯一分支 `main`。本文区分“本机已验证”“公网只读已验证”和“需要外部环境验证”，历史条目保留当时事实。
+
+## 2026-11-21 审查轮（两项确证修复 + 四项决策记录）
+
+主线复核告警链路、保留清理、导出 worker、认证/CSRF、前端 API 层与部署资产。核心不变量（去重、fencing、CSRF 绑定、HMAC、缺失≠零、告警保留只清已解决实例、11-15 五项修复无回归）复核成立。
+
+**确证并修复**：
+
+| 项 | 核实结论 | 修复 |
+|---|---|---|
+| 通知渠道配置错误打断送达循环（P1） | `deliver_once` 在领取提交后调用 `configured_channels()`，`APM_NOTIFICATION_CHANNELS_JSON` 非法时 ApiError(503) 逃逸至 `alert_loop` 整轮 except：被领取行卡 SENDING 至 30s 租约过期，每轮重领烧一次 attempt 直至 RETRY_EXHAUSTED（配置修好后通知也永久失败），同轮其余 pending 通知全部跳过 | 渠道解析包 try/except，该行 `FAILED/CHANNEL_UNCONFIGURED` 落库 + `alert_channel_configuration_invalid` 日志，循环继续；预算仍约束重复配错。补回归：两行同轮失败不逃逸、其余行不受影响、配置修复后正常送达 |
+| `APM_ALERT_HISTORY_RETENTION_DAYS` 未透传 Docker 部署（P2） | Settings/docs 已有该变量，但 compose 环境锚与 `.env.example` 均缺失，容器部署下 env 文件设置不生效 | compose 补透传（默认 90）、example 补条目；新增部署资产守卫要求 4 个告警变量同时存在于 compose 与 example；docs/08 同步 |
+
+**核实后保留（需产品/合规决策或打磨，详见云端待建设清单 2026-11-21 节）**：告警空窗口不自动恢复（有意 fail-closed，改语义需独立决策）；audit_logs 无保留策略（合规最短留存需运营决策）；告警清理无租户公平性（与 inbox 同款既有模式）；前端时间无时区标注（显示正确，仅缺标注）。
+
+**本轮验证（本机）**：Ruff、mypy 63 files、`pytest --basetemp <短目录>` **593 passed / 1 skipped**（skip 为未配置 `APM_TEST_NDK_BIN`；新增 2 项回归）、15 份文档门禁、凭据扫描全过。前端本轮无改动。
+
+**发布状态**：线上仍是旧镜像；本轮与 11-11/11-15 修复均待下次发布生效（发布前先 `alembic upgrade head`）。服务器侧 P0 待办不变（docs/13 第 4、5 节）。
 
 ## 2026-11-15 遗留项深度核实轮（逐项确认 + 修复确证问题）
 
