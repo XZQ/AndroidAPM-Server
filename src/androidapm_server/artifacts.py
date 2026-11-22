@@ -127,8 +127,16 @@ class LocalArtifactStore:
     async def promote(self, staged: StagedArtifact, storage_key: str) -> Path:
         """Atomically promote a validated temporary file to its immutable content key."""
         destination = self.path_for(storage_key)
-        await asyncio.to_thread(destination.parent.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(os.replace, staged.path, destination)
+
+        def _promote() -> None:
+            # Create the destination directory chain in the same thread right before
+            # the rename so it always exists for the call. The \\?\ long-path prefix
+            # keeps renames working when the content-keyed path exceeds MAX_PATH on
+            # Windows hosts with LongPathsEnabled disabled; it is a no-op elsewhere.
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(_win_longpath(staged.path), _win_longpath(destination))
+
+        await asyncio.to_thread(_promote)
         return destination
 
     async def discard(self, path: Path) -> None:
@@ -151,6 +159,25 @@ async def validate_java_mapping(path: Path) -> None:
 async def inspect_native_elf(path: Path) -> NativeElfIdentity:
     """Extract ABI and GNU build-id and require an unstripped symbol table."""
     return await asyncio.to_thread(_inspect_native_elf_sync, path)
+
+
+def _win_longpath(path: Path) -> str:
+    """Return an OS-native path string with the Windows extended-length prefix.
+
+    Content-keyed artifact paths (tenant/app/type/sha256/sha256) can exceed the
+    classic 260-character MAX_PATH limit. Hosts without LongPathsEnabled reject
+    such renames with misleading "path not found" errors, so normalize separators
+    and prepend \\\\?\\ on Windows only; other platforms get the plain string.
+    """
+    text = os.fspath(path)
+    if os.name != "nt":
+        return text
+    normalized = text.replace("/", "\\")
+    if normalized.startswith("\\\\?\\"):
+        return normalized
+    if normalized.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + normalized[2:]
+    return "\\\\?\\" + normalized
 
 
 def _write_all(output: BinaryIO, chunk: bytes) -> None:

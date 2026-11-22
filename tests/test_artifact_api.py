@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -161,7 +162,13 @@ async def test_mapping_upload_is_immutable_audited_and_idempotent(
     async with factory() as session:
         artifact = await session.scalar(select(SymbolArtifact))
         assert artifact is not None
-        assert (artifact_root / artifact.storage_key).read_bytes() == MAPPING
+        # Content-keyed paths can exceed Windows MAX_PATH; read through the
+        # extended-length prefix so the assertion works on such hosts too.
+        stored = artifact_root / artifact.storage_key
+        with open(
+            f"\\\\?\\{os.fspath(stored)}" if os.name == "nt" else os.fspath(stored), "rb"
+        ) as handle:
+            assert handle.read() == MAPPING
         assert await session.scalar(select(func.count()).select_from(SymbolArtifact)) == 1
         assert await session.scalar(select(func.count()).select_from(AuditLog)) == 2
 
