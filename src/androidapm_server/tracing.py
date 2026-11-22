@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
+from pydantic import Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +17,7 @@ from androidapm_server.db.models import InboxEvent
 from androidapm_server.db.query import _execute_bounded
 from androidapm_server.errors import ApiError
 from androidapm_server.performance import percentile
-from androidapm_server.query import QueryModel, QueryScope, QueryWindow, scope_for
+from androidapm_server.query import EventSummary, QueryModel, QueryScope, QueryWindow, scope_for
 from androidapm_server.query_auth import QueryPrincipal
 
 TRACE_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
@@ -93,6 +94,8 @@ class TraceDetailResponse(QueryModel):
     window: QueryWindow
     summary: TraceSummary
     spans: list[SpanObservation]
+    associated_events: list[EventSummary] = Field(default_factory=list)
+    associated_events_truncated: bool = False
 
 
 def valid_trace_id(value: object) -> str | None:

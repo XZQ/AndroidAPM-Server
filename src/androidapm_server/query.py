@@ -34,6 +34,7 @@ from androidapm_server.domain import IdentityQuality
 from androidapm_server.errors import ApiError
 from androidapm_server.normalization import field_availability
 from androidapm_server.query_auth import QueryPrincipal
+from androidapm_server.trace_context import trace_link
 
 QUERY_SOURCE = "durable_inbox"
 QUERY_CURSOR_VERSION = 1
@@ -185,6 +186,23 @@ class FingerprintResponse(QueryModel):
     sample_count: int
     fingerprint_coverage: float | None
     installation_reason: str | None = None
+
+
+class ReleaseSummary(QueryModel):
+    """One release version discovered from inbox events in the window."""
+
+    release_version: str
+    event_count: int
+    has_data: bool
+
+
+class ReleaseListResponse(QueryModel):
+    """Release discovery result so consoles never guess version identifiers."""
+
+    request_id: str
+    scope: QueryScope
+    window: QueryWindow
+    items: list[ReleaseSummary]
     items: list[FingerprintItem]
 
 
@@ -246,6 +264,22 @@ class IssueDetailResponse(QueryModel):
     android_versions: IssueDistribution
 
 
+class HostIntegrationSummary(QueryModel):
+    """Latest fixed capability states per known runtime session; no host-owned labels."""
+
+    point: str
+    label: str
+    state: str
+    known_session_count: int
+    total_session_count: int
+    missing_session_count: int
+    stale_session_count: int
+    invalid_report_count: int
+    coverage: float | None
+    latest_snapshot_at_ms: int | None
+    state_counts: dict[str, int]
+
+
 class DataQualityResponse(QueryModel):
     """Quality gates explaining whether a release query is safe to interpret."""
 
@@ -265,6 +299,8 @@ class DataQualityResponse(QueryModel):
     os_version_coverage: MetricResult
     sdk_health: MetricResult
     late_data: MetricResult
+    host_integrations: list[HostIntegrationSummary] = Field(default_factory=list)
+    integration_coverage: MetricResult | None = None
 
 
 class SymbolizationSummary(QueryModel):
@@ -281,6 +317,8 @@ class EventSummary(QueryModel):
     """Allow-listed L1 event metadata with no arbitrary raw fields."""
 
     event_id: str
+    trace_id: str | None = None
+    span_id: str | None = None
     module: str
     name: str
     event_family: str
@@ -936,6 +974,8 @@ def event_summary(event: InboxEvent) -> EventSummary:
         )
     return EventSummary(
         event_id=event.event_id,
+        trace_id=trace_link(payload.get("fields"))[0],
+        span_id=trace_link(payload.get("fields"))[1],
         module=_string_value(payload, "module") or "",
         name=_string_value(payload, "name") or "",
         event_family=_string_value(normalized, "event_family") or "UNREGISTERED",
@@ -1363,21 +1403,47 @@ def _session_metrics(
         },
     )
     results = []
-    for affected in failures:
+    health = [fact for fact in known if (fact.module, fact.name) == ("core", "sdk_health")]
+    health_sessions = {(fact.session_hmac_key_version, fact.session_hmac) for fact in health}
+    capabilities = (
+        [
+            value
+            for fact in health
+            for value in (fact.java_crash_capture_available, fact.native_crash_capture_available)
+        ],
+        [fact.anr_capture_available for fact in health],
+    )
+    for affected, channels in zip(failures, capabilities, strict=True):
+        metric_state, metric_reason = state, reason
+        if state == QUERY_STATE_PRESENT:
+            if health_sessions != starts or any(not _valid_sdk_health(fact) for fact in health):
+                metric_state, metric_reason = (
+                    QUERY_STATE_UNKNOWN_COVERAGE,
+                    "SESSION_HEALTH_COVERAGE_INCOMPLETE",
+                )
+            elif any(channel is False for channel in channels):
+                metric_state, metric_reason = QUERY_STATE_UNAVAILABLE, "INCIDENT_CAPTURE_DISABLED"
+            elif not channels or any(channel is None for channel in channels):
+                metric_state, metric_reason = (
+                    QUERY_STATE_UNKNOWN_COVERAGE,
+                    "INCIDENT_CAPTURE_CAPABILITY_UNKNOWN",
+                )
         denominator = len(starts)
         numerator = denominator - len(affected & starts)
         results.append(
             _metric(
-                state,
+                metric_state,
                 as_of_ms,
                 _sample_count(runtime),
                 value=numerator / denominator
-                if state == QUERY_STATE_PRESENT and denominator
+                if metric_state == QUERY_STATE_PRESENT and denominator
                 else None,
-                numerator=numerator if denominator else None,
+                numerator=numerator
+                if metric_state == QUERY_STATE_PRESENT and denominator
+                else None,
                 denominator=denominator if denominator else None,
                 coverage=coverage,
-                reason=reason,
+                reason=metric_reason,
             )
         )
     return results[0], results[1]

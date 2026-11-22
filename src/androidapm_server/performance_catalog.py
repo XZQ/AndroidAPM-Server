@@ -125,16 +125,6 @@ PERFORMANCE_FIELDS: tuple[PerformanceField, ...] = (
             ("responseSize", "bytes", "响应大小"),
         ),
     ),
-    # statusCode is a bounded low-cardinality HTTP observation, not a duration/count.
-    # The client uses -1 for transport failure and 0 for "no response seen"; both are
-    # valid reported values. Unit "http_status" is outside the non-negative physical
-    # bound set, so those sentinel values are preserved instead of marked INVALID.
-    *(
-        PerformanceField(
-            "network", name, "statusCode", "http_status", "HTTP 状态码", field_type="integer"
-        )
-        for name in ("network_request", "network_error", "network_phase")
-    ),
     *_fields(
         "network",
         ("network_phase",),
@@ -627,13 +617,44 @@ EVENT_CATALOG: tuple[EventContract, ...] = tuple(
                 ("battery_drain", "快速掉电"),
             ),
         ),
-        ("core", (("sdk_health", "SDK 自监控"), ("session_start", "标准 Telemetry 会话开始"))),
+        (
+            "core",
+            (
+                ("sdk_health", "SDK 自监控"),
+                ("session_start", "标准 Telemetry 会话开始"),
+                ("host_integration", "标准宿主接线快照"),
+            ),
+        ),
     )
     for name, label in events
 )
 PERFORMANCE_EVENTS = frozenset((event.module, event.name) for event in EVENT_CATALOG)
 
 DIMENSION_FIELDS: tuple[DimensionField, ...] = (
+    DimensionField(
+        "core", "sdk_health", "javaCrashCaptureAvailable", "Java Crash 采集可用", "boolean"
+    ),
+    DimensionField(
+        "core", "sdk_health", "nativeCrashCaptureAvailable", "现场 Native 采集可用", "boolean"
+    ),
+    DimensionField("core", "sdk_health", "anrCaptureAvailable", "ANR 采集可用", "boolean"),
+    DimensionField(
+        "core",
+        "host_integration",
+        "integration_point",
+        "宿主接线点",
+        "integer",
+        tuple(str(value) for value in range(7)),
+    ),
+    DimensionField(
+        "core",
+        "host_integration",
+        "integration_state",
+        "宿主接线状态",
+        "integer",
+        tuple(str(value) for value in range(5)),
+    ),
+    DimensionField("core", "host_integration", "module_active", "宿主模块运行", "boolean"),
     DimensionField("fps", "fps_stats", "dropSeverity", "丢帧等级", "integer", ("0", "1", "2", "3")),
     *(
         DimensionField(module, name, "isMainThread", "主线程", "boolean")

@@ -41,6 +41,9 @@ def fact(**changes: object) -> QueryFact:
         sdk_emit_count=20,
         sdk_drop_count=0,
         sdk_drop_rate=0.0,
+        java_crash_capture_available=True,
+        native_crash_capture_available=True,
+        anr_capture_available=True,
     )
     return replace(base, **changes)
 
@@ -98,6 +101,74 @@ def test_session_rates_never_invent_coverage(case: str, reason: str) -> None:
     result = build_release_health("r", PRINCIPAL, facts, "new", "old", TIME - 1, TIME + 1, 1000, 1)
     assert result.new_release.metrics.crash_free_sessions.value is None
     assert result.new_release.metrics.crash_free_sessions.reason == reason
+
+
+@pytest.mark.parametrize(
+    "field,value,affected,reason",
+    [
+        ("java_crash_capture_available", False, "crash_free_sessions", "INCIDENT_CAPTURE_DISABLED"),
+        (
+            "native_crash_capture_available",
+            False,
+            "crash_free_sessions",
+            "INCIDENT_CAPTURE_DISABLED",
+        ),
+        ("anr_capture_available", False, "anr_free_sessions", "INCIDENT_CAPTURE_DISABLED"),
+        (
+            "java_crash_capture_available",
+            None,
+            "crash_free_sessions",
+            "INCIDENT_CAPTURE_CAPABILITY_UNKNOWN",
+        ),
+        (
+            "native_crash_capture_available",
+            None,
+            "crash_free_sessions",
+            "INCIDENT_CAPTURE_CAPABILITY_UNKNOWN",
+        ),
+        ("anr_capture_available", None, "anr_free_sessions", "INCIDENT_CAPTURE_CAPABILITY_UNKNOWN"),
+    ],
+)
+def test_session_health_requires_each_actual_capture_channel(
+    field: str, value: bool | None, affected: str, reason: str
+) -> None:
+    """No observed incident must not become 100% when the detector was off or unknown."""
+    context = {
+        "session_identity_quality": "OCCURRENCE_BOUND",
+        "session_hmac_key_version": "v1",
+        "session_hmac": "s",
+    }
+    health = fact(**context, **{field: value})
+    start = fact(**context, name="session_start", session_start_valid=True)
+    # Later enabled evidence cannot erase an earlier disabled/unknown interval in the window.
+    metrics = build_release_health(
+        "r", PRINCIPAL, [health, start, fact(**context)], "new", "old", TIME - 1, TIME + 1, 1000, 1
+    ).new_release.metrics
+    gated = getattr(metrics, affected)
+    assert gated.value is None and gated.numerator is None and gated.denominator == 1
+    assert gated.reason == reason
+    unaffected = (
+        metrics.anr_free_sessions
+        if affected == "crash_free_sessions"
+        else metrics.crash_free_sessions
+    )
+    assert unaffected.state == "PRESENT" and unaffected.value == 1
+
+
+def test_session_health_requires_health_in_each_runtime_not_just_each_installation() -> None:
+    """One installation's health sample cannot validate a second process/init runtime."""
+    context = {"session_identity_quality": "OCCURRENCE_BOUND", "session_hmac_key_version": "v1"}
+    facts = [
+        fact(**context, session_hmac="a"),
+        fact(**context, session_hmac="a", name="session_start", session_start_valid=True),
+        fact(**context, session_hmac="b", name="session_start", session_start_valid=True),
+    ]
+    metrics = build_release_health(
+        "r", PRINCIPAL, facts, "new", "old", TIME - 1, TIME + 1, 1000, 1
+    ).new_release.metrics
+    for metric in (metrics.crash_free_sessions, metrics.anr_free_sessions):
+        assert metric.value is None and metric.denominator == 2
+        assert metric.reason == "SESSION_HEALTH_COVERAGE_INCOMPLETE"
 
 
 def test_issue_resource_distributions_are_weighted_and_keep_missing_coverage() -> None:

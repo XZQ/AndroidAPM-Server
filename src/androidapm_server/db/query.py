@@ -59,6 +59,9 @@ class QueryFact:
     session_start_valid: bool = False
     device_model: str | None = None
     os_version: str | None = None
+    java_crash_capture_available: bool | None = None
+    native_crash_capture_available: bool | None = None
+    anr_capture_available: bool | None = None
 
 
 async def resolve_issue_fingerprint(
@@ -182,6 +185,11 @@ async def load_window_facts(
         scene.label("scene"),
         scene_state.label("scene_state"),
         valid_health.label("sdk_emit_count"),
+        registered["javaCrashCaptureAvailable"].as_boolean().label("java_crash_capture_available"),
+        registered["nativeCrashCaptureAvailable"]
+        .as_boolean()
+        .label("native_crash_capture_available"),
+        registered["anrCaptureAvailable"].as_boolean().label("anr_capture_available"),
         late.label("late"),
         bucket.label("bucket"),
     ]
@@ -339,7 +347,15 @@ def _fact_from_mapping(row: RowMapping) -> QueryFact:
         sdk_drop_count=_optional_int(row["sdk_drop_count"]),
         sdk_drop_rate=_optional_float(row["sdk_drop_rate"]),
         sdk_emit_count=_optional_int(row["sdk_emit_count"]),
+        java_crash_capture_available=_optional_bool(row["java_crash_capture_available"]),
+        native_crash_capture_available=_optional_bool(row["native_crash_capture_available"]),
+        anr_capture_available=_optional_bool(row["anr_capture_available"]),
     )
+
+
+def _optional_bool(value: object) -> bool | None:
+    """Do not convert a missing channel, numeric placeholder, or arbitrary text to availability."""
+    return value if isinstance(value, bool) else None
 
 
 def _optional_int(value: object) -> int | None:
