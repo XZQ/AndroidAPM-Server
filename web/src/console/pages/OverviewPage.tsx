@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AlertTriangle, ArrowRight, RefreshCw } from "lucide-react";
 import { Link, useOutletContext } from "react-router-dom";
 
-import { getDataQuality, getFingerprints, getReleaseHealth } from "../../api";
+import { getDataQuality, getFingerprints, getReleaseHealth, getReleases } from "../../api";
 import { StateBadge } from "../../components/StateBadge";
 import { formatDateTime, formatPercent, shortId } from "../../format";
 import type { DataQuality, Fingerprints, QueryState, ReleaseHealth } from "../../types";
@@ -30,6 +30,27 @@ export function OverviewPage() {
     setHealth(null); setQuality(null); setFingerprints(null);
     setLoading(true);
     setError(null);
+    // Discover real release versions first; a persisted or default filter that has
+    // no events silently hides every page, so snap it to the newest real release.
+    const discovery = await Promise.allSettled([getReleases(filters)]);
+    if (current() && discovery[0].status === "fulfilled") {
+      const found = discovery[0].value.items.map((item) => item.releaseVersion);
+      if (found.length > 0 && !found.includes(filters.newRelease)) {
+        const next = found[0] ?? filters.newRelease;
+        const baseline = found.includes(filters.baselineRelease)
+          ? filters.baselineRelease
+          : (found.find((version) => version !== next) ?? `${next}-baseline`);
+        setFilters((currentFilters) => (
+          currentFilters.newRelease === next && currentFilters.baselineRelease === baseline
+            ? currentFilters
+            : { ...currentFilters, newRelease: next, baselineRelease: baseline }
+        ));
+        setNewRelease(next);
+        setBaselineRelease(baseline);
+        setLoading(false);
+        return;
+      }
+    }
     const results = await Promise.allSettled([
       getReleaseHealth(filters),
       getDataQuality(filters),
@@ -48,7 +69,7 @@ export function OverviewPage() {
     if (qualityResult.status === "fulfilled") setQuality(qualityResult.value);
     if (fingerprintResult.status === "fulfilled") setFingerprints(fingerprintResult.value);
     setLoading(false);
-  }, [begin, filters, handleFailure]);
+  }, [begin, filters, handleFailure, setFilters]);
 
   useEffect(() => { void load(); }, [load]);
 

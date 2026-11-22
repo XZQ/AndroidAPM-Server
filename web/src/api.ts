@@ -11,6 +11,7 @@ import type {
   ReleaseDecisionList,
   ReleaseDecision,
   ReleaseHealth,
+  ReleaseList,
   WebSession,
 } from "./types";
 
@@ -66,6 +67,15 @@ export async function getDataQuality(filters: QueryFilters): Promise<DataQuality
   return request<DataQuality>(
     `/v1/query/data-quality?${queryString({
       releaseVersion: filters.newRelease,
+      fromMs: filters.fromMs,
+      toMs: filters.toMs,
+    })}`,
+  );
+}
+
+export async function getReleases(filters: QueryFilters): Promise<ReleaseList> {
+  return request<ReleaseList>(
+    `/v1/query/releases?${queryString({
       fromMs: filters.fromMs,
       toMs: filters.toMs,
     })}`,

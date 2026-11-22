@@ -20,13 +20,44 @@ import { shortId } from "./format";
 import type { QueryFilters, WebSession } from "./types";
 
 const THEME_KEY = "androidapm-console-theme";
+const FILTERS_KEY = "androidapm-console-filters";
+
+/** Restores persisted filters, ignoring malformed or structurally stale payloads. */
+function restoreFilters(): QueryFilters {
+  try {
+    const raw = localStorage.getItem(FILTERS_KEY);
+    if (raw === null) return defaultFilters();
+    const parsed = JSON.parse(raw) as Partial<QueryFilters>;
+    if (typeof parsed.newRelease !== "string" || typeof parsed.baselineRelease !== "string") {
+      return defaultFilters();
+    }
+    return {
+      ...defaultFilters(),
+      newRelease: parsed.newRelease,
+      baselineRelease: parsed.baselineRelease,
+      fromMs: typeof parsed.fromMs === "number" ? parsed.fromMs : defaultFilters().fromMs,
+      toMs: typeof parsed.toMs === "number" ? parsed.toMs : defaultFilters().toMs,
+    };
+  } catch {
+    return defaultFilters();
+  }
+}
 
 export default function App() {
   const [session, setSession] = useState<WebSession | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [loginMessage, setLoginMessage] = useState<string | null>(null);
   const [dark, setDarkState] = useState(() => localStorage.getItem(THEME_KEY) !== "light");
-  const [filters, setFilters] = useState<QueryFilters>(defaultFilters);
+  const [filters, setFilters] = useState<QueryFilters>(restoreFilters);
+
+  useEffect(() => {
+    try {
+      const { newRelease, baselineRelease, fromMs, toMs } = filters;
+      localStorage.setItem(FILTERS_KEY, JSON.stringify({ newRelease, baselineRelease, fromMs, toMs }));
+    } catch {
+      // Storage may be unavailable (private mode); persistence is best-effort.
+    }
+  }, [filters]);
 
   const setDark: Dispatch<SetStateAction<boolean>> = useCallback((next) => {
     setDarkState((current) => {

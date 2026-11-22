@@ -6,6 +6,7 @@ import re
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from androidapm_server.config import Settings, get_settings
@@ -14,7 +15,7 @@ from androidapm_server.constants import (
     QUERY_RAW_PURPOSES,
     QUERY_RELEASE_DECISIONS,
 )
-from androidapm_server.db.models import AuditLog, ReleaseDecision
+from androidapm_server.db.models import AuditLog, InboxEvent, ReleaseDecision
 from androidapm_server.db.query import (
     get_scoped_event,
     list_release_decisions,
@@ -37,6 +38,8 @@ from androidapm_server.query import (
     ReleaseDecisionRequest,
     ReleaseDecisionResponse,
     ReleaseHealthResponse,
+    ReleaseListResponse,
+    ReleaseSummary,
     build_data_quality,
     build_issue_detail,
     build_release_health,
@@ -476,6 +479,47 @@ async def get_release_decisions(
         request_id=request.state.request_id,
         scope=scope_for(principal),
         items=[decision_response(item) for item in decisions],
+    )
+
+
+@router.get("/releases", response_model=ReleaseListResponse)
+async def get_releases(
+    request: Request,
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    from_ms: Annotated[int, Query(alias="fromMs")],
+    to_ms: Annotated[int, Query(alias="toMs")],
+) -> ReleaseListResponse:
+    """Discover release versions that actually have events inside the window."""
+    _reject_scope_parameters(request)
+    principal = await authenticate_query_request(session, request, settings)
+    _validate_window(from_ms, to_ms, settings)
+    rows = await session.execute(
+        select(InboxEvent.app_version, func.count())
+        .where(
+            InboxEvent.tenant_id == principal.tenant_id,
+            InboxEvent.app_id == principal.app_id,
+            InboxEvent.environment == principal.environment,
+            InboxEvent.app_version.is_not(None),
+            InboxEvent.app_version != "",
+            InboxEvent.event_timestamp_ms >= from_ms,
+            InboxEvent.event_timestamp_ms < to_ms,
+        )
+        .group_by(InboxEvent.app_version)
+        .order_by(func.max(InboxEvent.event_timestamp_ms).desc())
+        .limit(50)
+    )
+    releases = [
+        ReleaseSummary(release_version=row[0] or "", event_count=row[1], has_data=True)
+        for row in rows.all()
+    ]
+    _no_store(response)
+    return ReleaseListResponse(
+        request_id=request.state.request_id,
+        scope=scope_for(principal),
+        window=QueryWindow(from_ms=from_ms, to_ms=to_ms),
+        items=releases,
     )
 
 

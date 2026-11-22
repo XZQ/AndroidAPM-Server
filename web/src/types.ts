@@ -114,6 +114,19 @@ export interface Fingerprints {
   items: FingerprintItem[];
 }
 
+export interface ReleaseSummaryItem {
+  releaseVersion: string;
+  eventCount: number;
+  hasData: boolean;
+}
+
+export interface ReleaseList {
+  requestId: string;
+  scope: QueryScope;
+  window: QueryWindow;
+  items: ReleaseSummaryItem[];
+}
+
 export interface IssueDistributionItem {
   label: string;
   eventCount: number;

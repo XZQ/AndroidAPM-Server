@@ -174,6 +174,23 @@ class FingerprintItem(QueryModel):
     last_seen_ms: int
 
 
+class ReleaseSummary(QueryModel):
+    """One release version discovered from inbox events in the window."""
+
+    release_version: str
+    event_count: int
+    has_data: bool
+
+
+class ReleaseListResponse(QueryModel):
+    """Release discovery result so consoles never guess version identifiers."""
+
+    request_id: str
+    scope: QueryScope
+    window: QueryWindow
+    items: list[ReleaseSummary]
+
+
 class FingerprintResponse(QueryModel):
     """Bounded top-fingerprint result for one occurrence-bound release."""
 
