@@ -21,6 +21,7 @@ BINARY_SUFFIXES = frozenset(
 
 # Long random-looking API keys are flagged; short obvious test fixtures are not.
 PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("ingest key", re.compile(r"\bapm1_[A-Za-z0-9_-]{24,}")),
     ("query key", re.compile(r"\bapmq1_[A-Za-z0-9_-]{24,}")),
     ("ci key", re.compile(r"\bapmci1_[A-Za-z0-9_-]{24,}")),
     ("GitHub token", re.compile(r"\bghp_[A-Za-z0-9]{30,}")),
@@ -34,6 +35,16 @@ ASSIGNED_SECRET = re.compile(
     r"|POSTGRES_PASSWORD)[ \t]*[:=][ \t]*[\"']?([^\s\"'#,{}]+)",
     re.IGNORECASE | re.MULTILINE,
 )
+ASSIGNED_DATABASE_URL = re.compile(
+    r"^[ \t]*APM_DATABASE_URL[ \t]*[:=][ \t]*[\"']?"
+    r"postgresql(?:\+[a-z0-9_]+)?://[^:\s/@]+:([^@\s\"']+)@",
+    re.IGNORECASE | re.MULTILINE,
+)
+ASSIGNED_HMAC_RING = re.compile(
+    r"^[ \t]*APM_INSTALLATION_HMAC_KEYS_JSON[ \t]*[:=][ \t]*[\"']?(\{[^\r\n]+\})",
+    re.IGNORECASE | re.MULTILINE,
+)
+JSON_KEY_VALUE = re.compile(r'"[^"]+"\s*:\s*"([^"]+)"')
 PLACEHOLDER_MARKERS = (
     "replace-with",
     "change-me",
@@ -84,6 +95,15 @@ def findings(text: str) -> list[str]:
     for match in ASSIGNED_SECRET.finditer(text):
         if not is_placeholder(match.group(1)):
             labels.append("assigned secret value")
+            break
+    for match in ASSIGNED_DATABASE_URL.finditer(text):
+        if not is_placeholder(match.group(1)):
+            labels.append("assigned database URL password")
+            break
+    for match in ASSIGNED_HMAC_RING.finditer(text):
+        ring_text = match.group(1)
+        if any(not is_placeholder(val.group(1)) for val in JSON_KEY_VALUE.finditer(ring_text)):
+            labels.append("assigned installation HMAC key ring")
             break
     return labels
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import tracemalloc
 
 import pytest
 
@@ -11,6 +12,18 @@ from androidapm_server.protocol.compression import decompress_gzip_bounded
 def test_decompresses_single_bounded_gzip_member() -> None:
     payload = b"hello" * 100
     assert decompress_gzip_bounded(gzip.compress(payload), len(payload)) == payload
+
+
+def test_small_gzip_flush_does_not_allocate_max_output_buffer() -> None:
+    """zlib.flush(length) uses length as initial allocation; small bodies stay O(chunk)."""
+    compressed = gzip.compress(b"small-payload")
+    tracemalloc.start()
+    try:
+        assert decompress_gzip_bounded(compressed, 8 * 1024 * 1024) == b"small-payload"
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 512 * 1024
 
 
 def test_rejects_compression_bomb_at_output_limit() -> None:

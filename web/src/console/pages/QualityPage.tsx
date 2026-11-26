@@ -73,5 +73,14 @@ function CountPanel({ title, values }: { title: string; values: Record<string, n
 }
 
 function latestAsOf(quality: DataQuality): string {
-  return formatDateTime(Math.max(quality.releaseIdentity.asOfMs, quality.installationIdentity.asOfMs, quality.sdkHealth.asOfMs, quality.lateData.asOfMs));
+  const timestamps = [
+    quality.releaseIdentity.asOfMs,
+    quality.installationIdentity.asOfMs,
+    quality.sdkHealth.asOfMs,
+    quality.lateData.asOfMs,
+    quality.sessionIdentity?.asOfMs,
+    quality.deviceModelCoverage?.asOfMs,
+    quality.osVersionCoverage?.asOfMs,
+  ].filter((value): value is number => value !== undefined);
+  return formatDateTime(Math.max(...timestamps));
 }

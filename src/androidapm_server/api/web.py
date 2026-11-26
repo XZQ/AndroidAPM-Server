@@ -125,8 +125,20 @@ async def delete_session(
         )
     )
     await session.commit()
-    response.delete_cookie(WEB_SESSION_COOKIE, path="/", samesite="strict")
-    response.delete_cookie(WEB_CSRF_COOKIE, path="/", samesite="strict")
+    response.delete_cookie(
+        WEB_SESSION_COOKIE,
+        path="/",
+        secure=settings.web_session_cookie_secure,
+        httponly=True,
+        samesite="strict",
+    )
+    response.delete_cookie(
+        WEB_CSRF_COOKIE,
+        path="/",
+        secure=settings.web_session_cookie_secure,
+        httponly=False,
+        samesite="strict",
+    )
     _no_store(response)
 
 
@@ -151,6 +163,7 @@ async def get_web_asset(
 
 @ui_router.get("/")
 @ui_router.get("/app")
+@ui_router.get("/apps/{app_id}")
 @ui_router.get("/apps/{app_id}/overview")
 @ui_router.get("/apps/{app_id}/issues")
 @ui_router.get("/apps/{app_id}/issues/{fingerprint}")

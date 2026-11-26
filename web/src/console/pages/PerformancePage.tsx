@@ -1,25 +1,25 @@
 import { useCallback, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { StateBadge } from "../../components/StateBadge";
-import { formatDateTime, formatPercent } from "../../format";
+import { formatDateTime, formatNumber, formatPercent } from "../../format";
 import { getPerformance } from "../../productApi";
 import type { ConsoleContextValue } from "../context";
 import { ErrorPanel, LoadingPanel, PageHeader } from "../Primitives";
 import { useProductRead } from "../useProductRead";
 
-const number = (value: number | null | undefined) => value == null ? "—" : value.toLocaleString("zh-CN", { maximumFractionDigits: 3 });
+const number = (value: number | null | undefined) => formatNumber(value ?? null, 3);
 
 export function PerformancePage() {
   const { filters, setFilters } = useOutletContext<ConsoleContextValue>();
   const [metric, setMetric] = useState("launch.cold_start.launchDurationMs");
   const [releases, setReleases] = useState({ current: filters.newRelease, baseline: filters.baselineRelease });
-  const read = useCallback(() => getPerformance(filters, metric), [filters, metric]);
+  const read = useCallback((signal?: AbortSignal) => getPerformance(filters, metric, signal), [filters, metric]);
   const { data, error, reload } = useProductRead(read);
   if (error) return <ErrorPanel message={error} onRetry={() => void reload()} />;
   if (!data) return <LoadingPanel label="正在读取性能观测…" />;
   return <div className="console-page">
     <PageHeader title="性能分析" description="上报观测的版本对比；缺失不填零，摘要分位数不代表单帧或单请求分位数。" actions={<button type="button" onClick={() => void reload()}>刷新</button>} />
-    <form className="product-form" onSubmit={(event) => { event.preventDefault(); setFilters((current) => ({ ...current, newRelease: releases.current.trim(), baselineRelease: releases.baseline.trim() })); }}>
+    <form className="product-form" onSubmit={(event) => { event.preventDefault(); const next = releases.current.trim(); const base = releases.baseline.trim(); if (!next || !base || next === base) return; setFilters((current) => ({ ...current, newRelease: next, baselineRelease: base })); }}>
       <label>当前版本<input required value={releases.current} onChange={(event) => setReleases({ ...releases, current: event.target.value })} /></label>
       <label>基线版本<input required value={releases.baseline} onChange={(event) => setReleases({ ...releases, baseline: event.target.value })} /></label>
       <button disabled={!releases.current.trim() || !releases.baseline.trim() || releases.current.trim() === releases.baseline.trim()}>应用对比</button>

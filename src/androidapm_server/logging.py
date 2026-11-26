@@ -50,12 +50,15 @@ class SafeExceptionFormatter(logging.Formatter):
 
     def formatException(self, ei: Any) -> str:
         """Avoid exception stringification, including chained/grouped DB errors."""
+        if not isinstance(ei, tuple) or len(ei) < 2 or not isinstance(ei[1], BaseException):
+            return ""
         return str(_exception_details(ei[1]))
 
 
 def configure_logging(level: str) -> None:
     """Configure stdlib and structlog for JSON production output."""
-    logging.basicConfig(stream=sys.stdout, level=level.upper(), format="%(message)s")
+    resolved_level = logging.getLevelNamesMapping().get(level.upper(), logging.INFO)
+    logging.basicConfig(stream=sys.stdout, level=resolved_level, format="%(message)s")
     # Uvicorn can log a handled 500 again outside the application boundary.
     formatter = SafeExceptionFormatter("%(message)s")
     for logger in (
@@ -75,9 +78,7 @@ def configure_logging(level: str) -> None:
             _safe_exception,
             structlog.processors.JSONRenderer(),
         ],
-        wrapper_class=structlog.make_filtering_bound_logger(
-            logging.getLevelNamesMapping().get(level.upper(), logging.INFO)
-        ),
+        wrapper_class=structlog.make_filtering_bound_logger(resolved_level),
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )

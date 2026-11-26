@@ -84,3 +84,7 @@ exclude = ["src/androidapm_server/generated/"]
 [[tool.mypy.overrides]]
 module = ["google.protobuf.*", "opentelemetry.proto.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["androidapm_server.generated.apm_event_pb2"]
+ignore_errors = true

@@ -7,7 +7,10 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from typing import TypeVar
+
+from argon2 import PasswordHasher
 
 from androidapm_server.errors import ApiError
 
@@ -15,6 +18,13 @@ AUTH_HASH_WORKERS = 2
 AUTH_ATTEMPTS_PER_SECOND = 20
 AUTH_ATTEMPT_BURST = 40
 HashResult = TypeVar("HashResult")
+SHARED_PASSWORD_HASHER = PasswordHasher()
+
+
+@lru_cache(maxsize=1)
+def dummy_argon2_hash() -> str:
+    """Lazily compute one process-wide Argon2id hash to avoid import-time startup cost."""
+    return SHARED_PASSWORD_HASHER.hash("dummy-credential-secret")
 
 
 def _busy() -> ApiError:

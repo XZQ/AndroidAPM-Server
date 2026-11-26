@@ -6,12 +6,16 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from androidapm_server.auth_budget import AUTH_ATTEMPTS, HASH_VERIFIER
+from androidapm_server.auth_budget import (
+    AUTH_ATTEMPTS,
+    HASH_VERIFIER,
+    SHARED_PASSWORD_HASHER,
+    dummy_argon2_hash,
+)
 from androidapm_server.db.models import IngestKey, Tenant
 from androidapm_server.errors import ApiError
 
@@ -19,8 +23,7 @@ KEY_PREFIX = "apm1"
 KEY_SEPARATOR = "_"
 KEY_ID_BYTES = 9
 KEY_SECRET_BYTES = 32
-PASSWORD_HASHER = PasswordHasher()
-DUMMY_HASH = PASSWORD_HASHER.hash("dummy-credential-secret")
+PASSWORD_HASHER = SHARED_PASSWORD_HASHER
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +113,7 @@ async def authenticate_ingest_key(
 async def _verify_dummy_secret(secret: str) -> None:
     """Spend approximately one password verification for an unknown key id."""
     try:
-        await HASH_VERIFIER.verify(PASSWORD_HASHER.verify, DUMMY_HASH, secret)
+        await HASH_VERIFIER.verify(PASSWORD_HASHER.verify, dummy_argon2_hash(), secret)
     except (InvalidHashError, VerificationError, VerifyMismatchError):
         pass
 

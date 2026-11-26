@@ -10,9 +10,14 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_compose_contains_separate_durable_runtime_components() -> None:
     compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
     services = compose["services"]
-    assert {"postgres", "migrate", "gateway", "worker", "symbolizer"} <= services.keys()
+    assert {"postgres", "migrate", "gateway", "worker", "symbolizer", "alerts"} <= services.keys()
     assert services["gateway"]["read_only"] is True
     assert services["worker"]["read_only"] is True
+    assert services["alerts"]["read_only"] is True
+    assert services["worker"]["healthcheck"]["test"][-1].find("9101/metrics") != -1
+    assert services["symbolizer"]["healthcheck"]["test"][-1].find("9102/metrics") != -1
+    assert services["alerts"]["healthcheck"] == {"disable": True}
+    assert services["migrate"]["healthcheck"] == {"disable": True}
     assert services["gateway"]["depends_on"]["migrate"]["condition"] == (
         "service_completed_successfully"
     )
@@ -34,6 +39,9 @@ def test_compose_forwards_every_documented_alert_setting() -> None:
     environment = compose["services"]["gateway"]["environment"]
     example = (ROOT / ".env.example").read_text(encoding="utf-8")
     for name in (
+        "APM_LOG_LEVEL",
+        "APM_INGEST_ENABLED",
+        "APM_EXPORT_ENABLED",
         "APM_ALERT_POLL_SECONDS",
         "APM_NOTIFICATION_CHANNELS_JSON",
         "APM_NOTIFICATION_MAX_ATTEMPTS",

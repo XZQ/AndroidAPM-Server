@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -19,6 +19,7 @@ from androidapm_server.errors import ApiError
 from androidapm_server.performance_catalog import (
     DIMENSION_FIELDS,
     EVENT_CATALOG,
+    PERFORMANCE_BY_ID,
     PERFORMANCE_EVENTS,
     PERFORMANCE_FIELDS,
     DimensionField,
@@ -145,6 +146,14 @@ class PerformanceResponse(QueryModel):
     baseline_weighted_fps: WeightedFps
 
 
+_PERFORMANCE_EVENTS_BY_MODULE: dict[str, tuple[str, ...]] = {}
+for _module, _name in sorted(PERFORMANCE_EVENTS):
+    _PERFORMANCE_EVENTS_BY_MODULE[_module] = (
+        *_PERFORMANCE_EVENTS_BY_MODULE.get(_module, ()),
+        _name,
+    )
+
+
 async def load_observations(
     session: AsyncSession,
     principal: QueryPrincipal,
@@ -154,16 +163,20 @@ async def load_observations(
     releases: tuple[str, ...] | None = None,
     *,
     performance_only: bool = False,
+    event: tuple[str, str] | None = None,
+    occurrence_only: bool = False,
 ) -> list[dict[str, Any]]:
     """Project only normalized facts; reject oversized queries before aggregation."""
+    module_expr = InboxEvent.payload_json["module"].as_string()
+    name_expr = InboxEvent.payload_json["name"].as_string()
     statement = select(
         InboxEvent.app_version,
         InboxEvent.release_identity_quality,
         InboxEvent.occurrence_timestamp_ms,
         InboxEvent.received_at,
         InboxEvent.normalized_json,
-        InboxEvent.payload_json["module"].as_string().label("module"),
-        InboxEvent.payload_json["name"].as_string().label("name"),
+        module_expr.label("module"),
+        name_expr.label("name"),
     ).where(
         InboxEvent.tenant_id == principal.tenant_id,
         InboxEvent.app_id == principal.app_id,
@@ -173,15 +186,18 @@ async def load_observations(
     )
     if releases is not None:
         statement = statement.where(InboxEvent.app_version.in_(releases))
-    if performance_only:
+    if occurrence_only:
+        statement = statement.where(
+            InboxEvent.release_identity_quality == IdentityQuality.OCCURRENCE_BOUND.value
+        )
+    if event is not None:
+        statement = statement.where(module_expr == event[0], name_expr == event[1])
+    elif performance_only:
         statement = statement.where(
             or_(
                 *(
-                    and_(
-                        InboxEvent.payload_json["module"].as_string() == module,
-                        InboxEvent.payload_json["name"].as_string() == name,
-                    )
-                    for module, name in PERFORMANCE_EVENTS
+                    and_(module_expr == module, name_expr.in_(names))
+                    for module, names in _PERFORMANCE_EVENTS_BY_MODULE.items()
                 )
             )
         )
@@ -261,15 +277,21 @@ def _value(row: dict[str, Any], field: PerformanceField) -> tuple[str, float | N
     return state, None
 
 
-def percentile(values: list[float], quantile: float) -> float | None:
-    """Use the documented linear interpolation quantile over sorted observations."""
-    if not values:
+def _percentile_sorted(ordered: list[float], quantile: float) -> float | None:
+    """Use the documented linear interpolation quantile over pre-sorted observations."""
+    if not ordered:
         return None
-    ordered = sorted(values)
     position = (len(ordered) - 1) * quantile
     lower = math.floor(position)
     upper = math.ceil(position)
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+
+def percentile(values: list[float], quantile: float) -> float | None:
+    """Use the documented linear interpolation quantile over sorted observations."""
+    if not values:
+        return None
+    return _percentile_sorted(sorted(values), quantile)
 
 
 def summarize(rows: list[dict[str, Any]], field: PerformanceField) -> Observation:
@@ -292,6 +314,7 @@ def summarize(rows: list[dict[str, Any]], field: PerformanceField) -> Observatio
     mean: float | None = None
     for index, value in enumerate(values):
         mean = value if mean is None else mean + (value - mean) / (index + 1)
+    ordered = sorted(values)
     return Observation(
         state=state,
         sample_count=len(values),
@@ -301,11 +324,11 @@ def summarize(rows: list[dict[str, Any]], field: PerformanceField) -> Observatio
         unavailable_count=count - len(values) - states["MISSING"] - states["INVALID"],
         coverage=len(values) / count if count else None,
         mean=mean,
-        p50=percentile(values, 0.5),
-        p75=percentile(values, 0.75),
-        p95=percentile(values, 0.95),
-        maximum=max(values) if values else None,
-        minimum=min(values) if values else None,
+        p50=_percentile_sorted(ordered, 0.5),
+        p75=_percentile_sorted(ordered, 0.75),
+        p95=_percentile_sorted(ordered, 0.95),
+        maximum=ordered[-1] if ordered else None,
+        minimum=ordered[0] if ordered else None,
     )
 
 
@@ -399,10 +422,8 @@ def summarize_category(rows: list[dict[str, Any]], field: DimensionField) -> Cat
 
 def summarize_weighted_fps(rows: list[dict[str, Any]]) -> WeightedFps:
     """Keep missing/zero windows out of a duration-weighted reported FPS observation."""
-    fps_field = next(field for field in PERFORMANCE_FIELDS if field.id == "fps.fps_stats.fps")
-    window_field = next(
-        field for field in PERFORMANCE_FIELDS if field.id == "fps.fps_stats.windowDurationMs"
-    )
+    fps_field = PERFORMANCE_BY_ID["fps.fps_stats.fps"]
+    window_field = PERFORMANCE_BY_ID["fps.fps_stats.windowDurationMs"]
     pairs: list[tuple[float, float]] = []
     states: Counter[str] = Counter()
     for row in rows:
@@ -466,6 +487,15 @@ def summarize_weighted_fps(rows: list[dict[str, Any]]) -> WeightedFps:
     )
 
 
+def _group_by_event(rows: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Partition projected observations once by `(module, name)` to avoid O(F*N) scans."""
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        normalized = row["normalized_json"]
+        grouped[(str(normalized.get("module", "")), str(normalized.get("name", "")))].append(row)
+    return grouped
+
+
 def build_performance(
     rows: list[dict[str, Any]],
     principal: QueryPrincipal,
@@ -481,9 +511,13 @@ def build_performance(
     eligible = [row for row in rows if row["release_identity_quality"] == "OCCURRENCE_BOUND"]
     current = [row for row in eligible if row["app_version"] == new_release]
     baseline = [row for row in eligible if row["app_version"] == baseline_release]
+    current_by_event = _group_by_event(current)
+    baseline_by_event = _group_by_event(baseline)
     metrics = []
     for field in PERFORMANCE_FIELDS:
-        a, b = summarize(current, field), summarize(baseline, field)
+        event_key = (field.module, field.name)
+        a = summarize(current_by_event.get(event_key, []), field)
+        b = summarize(baseline_by_event.get(event_key, []), field)
         metrics.append(
             PerformanceMetric(
                 id=field.id,
@@ -498,20 +532,25 @@ def build_performance(
             )
         )
     width = query_bucket_ms(from_ms, to_ms)
+    trend_key = (trend_field.module, trend_field.name)
+    current_trend_rows: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for row in current_by_event.get(trend_key, []):
+        bucket = (row["occurrence_timestamp_ms"] - from_ms) // width
+        if bucket >= 0:
+            current_trend_rows[bucket].append(row)
+    baseline_trend_rows: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for row in baseline_by_event.get(trend_key, []):
+        bucket = (row["occurrence_timestamp_ms"] - from_ms) // width
+        if bucket >= 0:
+            baseline_trend_rows[bucket].append(row)
     trend = [
         TrendPoint(
             from_ms=start,
             to_ms=min(start + width, to_ms),
-            current=summarize(
-                [r for r in current if start <= r["occurrence_timestamp_ms"] < start + width],
-                trend_field,
-            ),
-            baseline=summarize(
-                [r for r in baseline if start <= r["occurrence_timestamp_ms"] < start + width],
-                trend_field,
-            ),
+            current=summarize(current_trend_rows.get(bucket, []), trend_field),
+            baseline=summarize(baseline_trend_rows.get(bucket, []), trend_field),
         )
-        for start in range(from_ms, to_ms, width)
+        for bucket, start in enumerate(range(from_ms, to_ms, width))
     ]
     counts: Counter[str] = Counter()
     current_counts: Counter[str] = Counter()
@@ -549,11 +588,23 @@ def build_performance(
         late_count=late,
         non_occurrence_count=len(rows) - len(eligible),
         network_error_ratio=_paired_ratio(
-            current, "network", "network_aggregate", "errorCount", "totalRequests"
+            current_by_event.get(("network", "network_aggregate"), []),
+            "network",
+            "network_aggregate",
+            "errorCount",
+            "totalRequests",
         ),
-        jank_ratio=_paired_ratio(current, "fps", "fps_stats", "jankCount", "frameCount"),
-        weighted_fps=summarize_weighted_fps(current),
-        baseline_weighted_fps=summarize_weighted_fps(baseline),
+        jank_ratio=_paired_ratio(
+            current_by_event.get(("fps", "fps_stats"), []),
+            "fps",
+            "fps_stats",
+            "jankCount",
+            "frameCount",
+        ),
+        weighted_fps=summarize_weighted_fps(current_by_event.get(("fps", "fps_stats"), [])),
+        baseline_weighted_fps=summarize_weighted_fps(
+            baseline_by_event.get(("fps", "fps_stats"), [])
+        ),
         event_statistics=[
             EventStatistic(
                 module=contract.module,
@@ -573,8 +624,12 @@ def build_performance(
                 name=field.name,
                 field=field.field,
                 label=field.label,
-                current=summarize_category(current, field),
-                baseline=summarize_category(baseline, field),
+                current=summarize_category(
+                    current_by_event.get((field.module, field.name), []), field
+                ),
+                baseline=summarize_category(
+                    baseline_by_event.get((field.module, field.name), []), field
+                ),
             )
             for field in DIMENSION_FIELDS
         ],

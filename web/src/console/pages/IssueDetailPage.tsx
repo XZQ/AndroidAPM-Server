@@ -62,8 +62,8 @@ export function IssueDetailPage() {
         actions={<StateBadge state={detail.state} />}
       />
 
+      {detail.reason ? <p className="inline-note">{reasonLabel(detail.reason)}</p> : null}
       <section className="issue-summary-band">
-        {detail.reason ? <p>{reasonLabel(detail.reason)}</p> : null}
         <SummaryFact label="事件数" value={detail.eventCount.toLocaleString("zh-CN")} />
         <SummaryFact label="影响安装" value={detail.affectedInstallationCount?.toLocaleString("zh-CN") ?? "不可用"} />
         <SummaryFact label="首次发生" value={detail.firstSeenMs === null ? "—" : formatDateTime(detail.firstSeenMs)} />
@@ -136,12 +136,12 @@ export function DistributionView({ distribution }: { distribution: IssueDistribu
       未提供 {coverage.missingEventCount} · 已过期 {coverage.expiredEventCount} · 历史状态未知 {coverage.retentionUnknownEventCount}
     </p>
   ) : null;
-  if (distribution.state === "UNKNOWN_COVERAGE" || distribution.state === "UNAVAILABLE") {
+  if (distribution.state === "UNKNOWN_COVERAGE" || distribution.state === "UNAVAILABLE" || distribution.state === "NO_DATA" || distribution.items.length === 0) {
     return (
       <div className="distribution-unavailable">
         <Layers3 size={23} aria-hidden="true" />
         <StateBadge state={distribution.state} />
-        <p>{reasonLabel(distribution.reason) ?? distribution.reason ?? "该维度当前不可用"}</p>
+        <p>{reasonLabel(distribution.reason) ?? distribution.reason ?? (distribution.state === "NO_DATA" ? "当前窗口没有可分布的样本" : "该维度当前不可用")}</p>
         {coverageNote}
       </div>
     );

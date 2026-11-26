@@ -135,3 +135,47 @@ def test_exit_timestamp_cannot_overflow_the_otlp_clock() -> None:
     result = normalize_event(event)
     assert result.occurrence_timestamp_ms == event.timestamp
     assert result.normalized_json["field_states"]["exitTimestamp"] == "INVALID"
+
+
+def test_anr_whitespace_main_thread_stack_falls_back_to_stack_samples() -> None:
+    event = ApmEvent(
+        timestamp=1_700_000_000_000,
+        event_id="anr-fallback",
+        module="anr",
+        name="anr_detected",
+        kind="ALERT",
+        severity="ERROR",
+        priority="HIGH",
+        process_name="app",
+        thread_name="main",
+        fields={
+            "mainThreadStack": "   \n\t  ",
+            "stackSamples": "at com.example.Main.work(Main.kt:42)",
+        },
+    )
+    result = normalize_event(event)
+    assert result.incident_fingerprint is not None
+
+
+def test_occurrence_canonicalizes_session_uuid_and_rejects_control_chars() -> None:
+    from pydantic import ValidationError
+
+    from androidapm_server.domain import OccurrenceContext
+
+    occ = OccurrenceContext(
+        service_version="2.0.0",
+        version_code="2",
+        app_build="sha",
+        variant="release",
+        installation_id="install-1",
+        session_id="5B3BD3A708EA4F079A47E04ECAEEF009",
+    )
+    assert occ.session_id == "5b3bd3a7-08ea-4f07-9a47-e04ecaeef009"
+    with pytest.raises(ValidationError):
+        OccurrenceContext(
+            service_version="2.0.0",
+            version_code="2",
+            app_build="sha",
+            variant="release",
+            installation_id="bad\x00id",
+        )

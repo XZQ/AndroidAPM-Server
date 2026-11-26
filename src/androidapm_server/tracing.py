@@ -200,8 +200,11 @@ async def load_spans(
     to_ms: int,
     release_version: str | None,
     trace_id: str | None = None,
+    *,
+    max_rows: int | None = None,
 ) -> tuple[list[SpanObservation], int, int]:
     """Scan exact scoped trace events and reject excess before returning any partial facts."""
+    row_limit = settings.query_max_rows if max_rows is None else max_rows
     statement = select(
         InboxEvent.event_id,
         InboxEvent.payload_json,
@@ -225,8 +228,12 @@ async def load_spans(
         statement = statement.where(
             func.lower(InboxEvent.payload_json["fields"]["traceId"].as_string()) == trace_id
         )
-    rows = (await _execute_bounded(session, statement.limit(settings.query_max_rows + 1))).all()
-    if len(rows) > settings.query_max_rows:
+    rows = (await _execute_bounded(session, statement.limit(row_limit + 1))).all()
+    if len(rows) > row_limit:
+        if max_rows is not None and row_limit < settings.query_max_rows:
+            raise ApiError(
+                422, "trace_span_limit", "Reduce the window; trace detail exceeds the span limit"
+            )
         raise ApiError(422, "query_row_limit", "Reduce the time window; no partial data returned")
     spans, invalid, expired = [], 0, 0
     for row in rows:

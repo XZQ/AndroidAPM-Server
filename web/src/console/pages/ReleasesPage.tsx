@@ -2,11 +2,11 @@ import { canInvestigate } from "../../permissions";
 import { useCallback, useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
-import { createReleaseDecision, getReleaseDecisions, getReleaseHealth } from "../../api";
+import { createReleaseDecision, getDataQuality, getReleaseDecisions, getReleaseHealth } from "../../api";
 import { DecisionPanel } from "../../components/DecisionPanel";
 import { StateBadge } from "../../components/StateBadge";
 import { formatDateTime } from "../../format";
-import type { ReleaseDecision, ReleaseDecisionInput, ReleaseDecisionValue, ReleaseHealth } from "../../types";
+import type { DataQuality, ReleaseDecision, ReleaseDecisionInput, ReleaseDecisionValue, ReleaseHealth } from "../../types";
 import type { ConsoleContextValue } from "../context";
 import { useRequestGuard } from "../useRequestGuard";
 import { EmptyPanel, ErrorPanel, LoadingPanel, PageHeader } from "../Primitives";
@@ -14,6 +14,7 @@ import { EmptyPanel, ErrorPanel, LoadingPanel, PageHeader } from "../Primitives"
 export function ReleasesPage() {
   const { filters, session, handleFailure } = useOutletContext<ConsoleContextValue>();
   const [health, setHealth] = useState<ReleaseHealth | null>(null);
+  const [quality, setQuality] = useState<DataQuality | null>(null);
   const [decisions, setDecisions] = useState<ReleaseDecision[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -24,20 +25,25 @@ export function ReleasesPage() {
 
   const load = useCallback(async () => {
     const current = begin();
-    setHealth(null); setDecisions([]); setDecisionError(null);
+    setHealth(null); setQuality(null); setDecisions([]); setDecisionError(null);
     setLoading(true); setError(null);
     try {
-      const result = await getReleaseHealth(filters);
-      const history = canInvestigate(session.role) ? (await getReleaseDecisions(filters.newRelease)).items : [];
+      const [result, dataQuality, history] = await Promise.all([
+        getReleaseHealth(filters),
+        getDataQuality(filters),
+        canInvestigate(session.role)
+          ? getReleaseDecisions(filters.newRelease).then((list) => list.items)
+          : Promise.resolve<ReleaseDecision[]>([]),
+      ]);
       if (!current()) return;
-      setHealth(result); setDecisions(history);
+      setHealth(result); setQuality(dataQuality); setDecisions(history);
     } catch (caught) { if (current()) setError(handleFailure(caught, "发布证据查询失败")); }
     finally { if (current()) setLoading(false); }
   }, [begin, filters, handleFailure, session.role]);
   useEffect(() => { void load(); }, [load]);
 
   async function submit(decision: ReleaseDecisionValue, reason: string) {
-    if (health === null || loading || submitting || error !== null) return false;
+    if (health === null || quality === null || loading || submitting || error !== null) return false;
     const current = beginSubmit();
     setSubmitting(true); setDecisionError(null);
     const release = health.newRelease;
@@ -51,11 +57,13 @@ export function ReleasesPage() {
         releaseState: release.state,
         baselineState: health.baselineRelease.state,
         javaCrashEvents: release.metrics.javaCrashEvents.value,
+        nativeCrashEvents: release.metrics.nativeCrashEvents?.value ?? null,
+        nativeTombstoneEvents: release.metrics.nativeTombstoneEvents?.value ?? null,
         anrEvents: release.metrics.anrEvents.value,
         affectedInstallations: release.metrics.affectedInstallations.value,
         activeInstallations: release.metrics.activeInstallations.value,
         affectedInstallationRatio: release.metrics.affectedInstallationRatio.value,
-        dataQualityState: release.state,
+        dataQualityState: quality.state,
         queryRequestId: health.requestId,
       },
     };

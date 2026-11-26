@@ -1,6 +1,6 @@
 # 真实场景、查询、Dashboard 与告警
 
-> 当前实现补充：2026-10-14。本地已实现 Native Crash/Tombstone 分开统计、243 个数值字段、66 个精确事件、29 个固定类别、会话率、标准设备/OS 分布、手动 Trace 页面及可选 OTLP Metrics/Traces。会话率仅在真实 session_start 和质量门禁满足时显示；历史字段缺失、分类过期和旧 Trace 缺起止仍显示真实不可用原因。当前功能与统计口径见 [本地产品功能](11-本地产品功能.md) 和 [统计契约](12-统计契约与口径.md)；以下场景基线保留历史设计背景。
+> 当前实现补充：2026-10-14。本地已实现 Native Crash/Tombstone 分开统计、246 个数值字段、66 个精确事件、29 个固定类别、会话率、标准设备/OS 分布、手动 Trace 页面及可选 OTLP Metrics/Traces。会话率仅在真实 session_start 和质量门禁满足时显示；历史字段缺失、分类过期和旧 Trace 缺起止仍显示真实不可用原因。当前功能与统计口径见 [本地产品功能](11-本地产品功能.md) 和 [统计契约](12-统计契约与口径.md)；以下场景基线保留历史设计背景。
 
 > 场景基线：2026-08-28。查询口径必须以 `docs/04-OTLP映射与SigNoz.md` 的真实事件目录为准；本文不是“把 15 个模块各画一页”的面板清单。
 
@@ -91,7 +91,7 @@
 
 产品 Web 源码与锁文件位于 `web/`，生产构建由 FastAPI 同源提供；Dashboard 和告警以版本化 SigNoz 资产保存在仓库，通过 API/导入脚本发布到 staging，再推广生产。禁止只在 UI 手工创建而不导出。每个页面/面板必须注明事件来源、过滤维度、单位、时间窗口和空数据含义。
 
-当前 API 面为：`GET /v1/query/release-health`、`/fingerprints`、`/issues/{fingerprint}`、`/data-quality`、investigator-only `/events` 与 `/events/{event_id}`、purpose-bound `POST /events/{event_id}/raw`，以及 `GET/POST /release-decisions`。Issue 详情是 L0 聚合，viewer 可读；凭据创建时固定 scope，窗口、扫描行数、page size 与 cursor filter 均有上限，游标使用专用 HMAC 防篡改。`investigator` 才能枚举事件、读取原始证据和记录人工 `continue/pause/rollback`；服务端不会自动执行发布动作。
+当前 API 面为：`GET /v1/query/release-health`、`/releases`、`/fingerprints`、`/issues/{fingerprint}`、`/data-quality`、investigator-only `/events` 与 `/events/{event_id}`、purpose-bound `POST /events/{event_id}/raw`，以及 `GET/POST /release-decisions`。Issue 详情是 L0 聚合，viewer 可读；凭据创建时固定 scope，窗口、扫描行数、page size 与 cursor filter 均有上限，游标使用专用 HMAC 防篡改。`investigator` 才能枚举事件、读取原始证据和记录人工 `continue/pause/rollback`；服务端不会自动执行发布动作。
 
 2026-10-13 扩展 API：`GET /v1/query/performance`、`/v1/alerts` 及规则/评估/静默/确认操作、`/v1/manage/settings`、`/keys`、`/configs`、`/audit`。admin 继承 investigator 读取与决策权限，管理写入必须有 admin 和 cookie CSRF；既有凭据不会自动提升权限。配置回滚以旧内容签名发布新 revision。告警统计上报观测，空数据不等于恢复；Webhook 仅由服务端配置目的地，浏览器只见渠道别名。
 

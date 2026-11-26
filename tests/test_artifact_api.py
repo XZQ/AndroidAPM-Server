@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 from collections.abc import AsyncIterator
@@ -12,11 +13,10 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from androidapm_server.api.ingest import get_settings
 from androidapm_server.artifacts import NativeElfIdentity
 from androidapm_server.auth import generate_ingest_key
 from androidapm_server.ci_auth import generate_ci_key
-from androidapm_server.config import Settings
+from androidapm_server.config import Settings, get_settings
 from androidapm_server.constants import CI_SCOPE_ARTIFACT_WRITE
 from androidapm_server.db.base import Base
 from androidapm_server.db.models import AuditLog, CiKey, IngestKey, SymbolArtifact, Tenant
@@ -67,6 +67,7 @@ async def artifact_api(
     app = create_app()
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         environment="test",
         artifact_storage_path=artifact_root,
@@ -165,10 +166,9 @@ async def test_mapping_upload_is_immutable_audited_and_idempotent(
         # Content-keyed paths can exceed Windows MAX_PATH; read through the
         # extended-length prefix so the assertion works on such hosts too.
         stored = artifact_root / artifact.storage_key
-        with open(
-            f"\\\\?\\{os.fspath(stored)}" if os.name == "nt" else os.fspath(stored), "rb"
-        ) as handle:
-            assert handle.read() == MAPPING
+        stored_path = f"\\\\?\\{os.fspath(stored)}" if os.name == "nt" else os.fspath(stored)
+        contents = await asyncio.to_thread(Path(stored_path).read_bytes)
+        assert contents == MAPPING
         assert await session.scalar(select(func.count()).select_from(SymbolArtifact)) == 1
         assert await session.scalar(select(func.count()).select_from(AuditLog)) == 2
 
@@ -247,3 +247,31 @@ async def test_checksum_mapping_and_native_identity_are_validated(
         )
     assert native.status_code == 409
     assert native.json()["code"] == "artifact_identity_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_failed_duplicate_replay_preserves_live_committed_artifact_file(
+    artifact_api: tuple[AsyncClient, async_sessionmaker[AsyncSession], str, str, Path],
+) -> None:
+    """A failing duplicate upload must never unlink the existing committed artifact on disk."""
+    client, factory, ci_key, _ingest_key, artifact_root = artifact_api
+    headers = artifact_headers(ci_key, MAPPING)
+    first = await client.post("/v1/artifacts/java-mapping", headers=headers, content=MAPPING)
+    assert first.status_code == 200
+    async with factory() as session:
+        artifact = await session.scalar(select(SymbolArtifact))
+        assert artifact is not None
+        storage_key = artifact.storage_key
+    stored = artifact_root / storage_key
+    stored_path = f"\\\\?\\{os.fspath(stored)}" if os.name == "nt" else os.fspath(stored)
+    assert await asyncio.to_thread(os.path.exists, stored_path)
+
+    with patch(
+        "androidapm_server.api.artifacts.requeue_matching_missing_jobs",
+        new=AsyncMock(side_effect=RuntimeError("simulated post-promote DB failure")),
+    ):
+        with pytest.raises(RuntimeError, match="simulated post-promote DB failure"):
+            await client.post("/v1/artifacts/java-mapping", headers=headers, content=MAPPING)
+
+    assert await asyncio.to_thread(os.path.exists, stored_path)
+    assert await asyncio.to_thread(Path(stored_path).read_bytes) == MAPPING

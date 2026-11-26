@@ -182,6 +182,8 @@ class InboxEvent(Base):
             postgresql_where=text("raw_pruned_at IS NULL"),
             sqlite_where=text("raw_pruned_at IS NULL"),
         ),
+        # Covering index for scoped pipeline status counts in GET /v1/manage/settings (0011).
+        Index("ix_inbox_scope_status", "tenant_id", "app_id", "environment", "status"),
     )
 
     id: Mapped[int] = mapped_column(BIGINT_PRIMARY_KEY, primary_key=True, autoincrement=True)
@@ -328,6 +330,7 @@ class SymbolizationJob(Base):
     __table_args__ = (
         Index("ix_symbol_job_claim", "status", "next_attempt_at", "lease_expires_at"),
         Index("ix_symbol_job_tenant_event", "tenant_id", "event_id"),
+        Index("ix_symbol_job_tenant_status", "tenant_id", "status", "inbox_event_id"),
     )
 
     id: Mapped[int] = mapped_column(BIGINT_PRIMARY_KEY, primary_key=True, autoincrement=True)

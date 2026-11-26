@@ -42,7 +42,7 @@
     "description": "Exact crash/java_crash count is {{$value}}. This template has no active channel and must remain unrouted until app/environment/version scope, minimum sample, installation identity coverage, SDK-drop/late-data gates, trigger and recovery are verified in staging."
   },
   "notificationSettings": {
-    "groupBy": ["service.name", "deployment.environment.name"],
+    "groupBy": ["service.name", "deployment.environment.name", "service.version"],
     "usePolicy": true,
     "renotify": { "enabled": false, "interval": "30m", "alertStates": [] }
   },

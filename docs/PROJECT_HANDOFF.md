@@ -2,6 +2,54 @@
 
 > 当前基线：2026-11-21，服务端唯一分支 `main`。本文区分“本机已验证”“公网只读已验证”和“需要外部环境验证”，历史条目保留当时事实。
 
+## 2026-11-26 全仓深度审查与确证修复（本地已验证，未部署）
+
+对后端核心/协议/Worker/OTLP/符号化、API/DB/11 版迁移、Web 控制台与脚本/部署/CI/文档全量审计并完成两轮修复（含全部待审查项按最佳实践落地），补充对应回归：
+
+- **第二轮审查项落地（最佳实践）**：
+  - `ReleasesPage.tsx` 并行拉取 `getDataQuality(filters)`，决策快照写入真实 `quality.state`（含 `nativeCrashEvents`/`nativeTombstoneEvents`）；`ConsoleLayout.tsx` 对非时间窗路由（`/settings`、`/alerts`、`/events/:id`）不随 `filters` 重挂载，保留未保存表单、一次性 secret 与 L1 审计；`useProductRead.ts` 接入 `AbortController` 取消过期 GET 且刷新不闪白整页。
+  - 新增 append-only 迁移 `20261126_0011_settings_status_index.py`（模型同步声明 `ix_inbox_scope_status` 与 `ix_symbol_job_tenant_status`），使 `GET /v1/manage/settings` 状态聚合走覆盖索引。
+  - `db/query.py` + `api/query.py` 移除未用 `installation_identity_quality` 分组并按端点裁剪 `load_window_facts` 维度（`/data-quality` 将高基数安装/会话/设备/OS 折叠为存在性）。
+  - `scripts/check_production_config.py` 强制 session/cursor/installation 三域及环内密钥互不复用；`scripts/check_secrets.py` 增补内嵌 `APM_DATABASE_URL` 口令与 `APM_INSTALLATION_HMAC_KEYS_JSON` 真实值检测。
+  - `symbolization.py` 在 POSIX 使用独立进程组 `start_new_session` + `killpg` 与 2s 有界清理超时；`otlp/metrics.py` + `otlp/traces.py` 补齐 `android.apm.app_id` 与 `OTLP_SCHEMA_URL`；`performance_catalog.py` 对齐 `queueBytes` 为 `integer` 并清除 `normalization.py` 11 条重叠定义；`alerts.py` + `AlertsPage.tsx` 按指标单位开放 `ratio_delta`（`[-1, 1]`）与 `http_status`（`>= -1`）有符号阈值。
+  - `auth_budget.py` + `auth/ci_auth/query_auth.py` 改为共享懒初始化 Argon2id dummy hash；`domain.py` 规范化 `session_id` UUID 并拒绝 `installation_id` 等发生时身份的控制字符；`admin.py` 为 `publish_config` 加租户行锁并拒绝为停用租户发凭据；`api/product.py` 统一 `acknowledged_by = query-key:{key_id}` 并校验 `displayName`/`newRelease`/`baselineRelease`；`.github/workflows/ci.yml` 增加 `uv`/`pnpm` 缓存；`docs/adr/0007` 增补 2026-11-07 复核轮未知环境注记。
+
+- **数据丢失 / 正确性修复**：
+  - `api/artifacts.py` + `artifacts.py`：重复上传失败时不再误删磁盘上已提交的活制品文件；`LocalArtifactStore.promote`/`discard` 补齐目录创建与删除的 Windows `\\?\` 长路径处理。
+  - `query.py`：`native_crash_events` / `native_tombstone_events` 移至 `quality_state = gate_state` 之前计算，修复安装样本或 SDK-health 门禁未满足时二者静默变为 `UNAVAILABLE`/`value=None` 的计数 bug。
+  - `db/query.py`：`load_window_facts` 中 `session_schema_version`/`session_count` 改 `CAST(... AS BIGINT)`，避免 PostgreSQL 32 位 `int4` 溢出 500；`get_releases` 改用 `list_discovered_releases`（`_execute_bounded` + `occurrence_timestamp_ms` 排序 + 单整型 `COUNT` 预算探针）。
+  - `alerts.py` + `performance.py` + `api/product.py`：`.p95` 告警改为按单事件 `(module, name)` + `occurrence_only` 过滤；后台 `alert_loop` 启用按规则隔离预算错误（防止单条 `.p95` 回滚同 scope 的 SQL 计数规则）；`deliver_once` 在 PG 下加 `FOR UPDATE SKIP LOCKED`；`GET /v1/alerts` 容忍非法渠道配置而不 503；`edit_rule` 重置 `last_sample_count=0`；CI key 创建/撤销审计显式写入 `environment: null`；重复撤销保留原 `revoked_at`。
+  - `db/symbolization.py` + `symbolization.py` + `symbolizer_worker.py`：`resolve_artifact` 补 `status == active` 过滤；统一 `build_id` 小写键；`requeue_matching_missing_jobs` 改批量 `UPDATE` 并更新 `updated_at`。
+  - `logging.py` / `main.py` / `observability.py` / `normalization.py` / `otlp/logs.py` / `remote_config.py` / `web_auth.py` / `api/web.py` / `db/maintenance.py`：修复 `SafeExceptionFormatter.formatException` 在 `ei[1]` 为 `None` 时崩溃与未知 `log_level` 报错；生产模式大小写无关并关闭 `/openapi.json`、lifespan 释放 `HASH_VERIFIER`；`_snapshot_loop` 捕获会话异常不永久退出；ANR 空白 `mainThreadStack` 回退 `stackSamples`；修复 naive UTC 在 `otlp/logs.py`/`remote_config.py` 偏移及 `b64decode(validate=True)`；拒绝 `bool` session 版本；登出清 Cookie 补 `secure`/`httponly` 并补 `/apps/{app_id}` SPA 路由；容量准入捕获 PG `57014`。
+- **性能与死代码清理**：
+  - `protocol/compression.py`：修复 `decompressor.flush(remaining + 1)` 每次小请求分配 8.4 MiB 缓冲区，改为分块上限。
+  - `performance.py` / `otlp/metrics.py` / `worker.py` / `tracing.py` / `db/inbox.py` / `query.py`：`build_performance` 按事件预分组（消除 O(275·N) 扫描）与单次排序；`otlp/metrics.py` 预索引 `METRIC_FIELDS`；`worker.py` 批量续租与批量 `mark_delivered`、按 signal pending 懒建客户端、关闭异步引擎；`get_trace_detail` 按 1,000 span 上限截断加载；`db/inbox.py` 消除每事件三次 JSON/UTF-8 编码；移除 `normalization.py` 重复 `FieldDefinition` 与 `protocol/envelope_v2,v3.py` 预检 map/frame 上限。
+- **前端控制台与测试环境**：
+  - 修复 `OverviewPage` 单版本自动发现把 `baselineRelease` 设成等于 `newRelease` 触发 400 的死锁、移除不可达分支并补 Native delta 与 `encodeURIComponent`；`App.tsx` 主题读写加 `try/catch` 与持久化窗口校验；补齐 `SESSION_KEY_ROTATION_BREAKS_CONTINUITY` / `SESSION_START_NOT_IN_WINDOW` 标签与前后端类型对齐；修复 `IssuesPage` 指纹大小写搜索、`SettingsPage` 过期凭据误显 `ACTIVE` 与空状态、`IssueDetailPage` `NO_DATA` 分布与摘要网格布局、`TracesPage` O(N) 深度计算、`DecisionPanel`/`AlertsPage`/`PerformancePage` 输入校验、`productApi.ts` 异步 CSRF、`api.ts` 422 `detail` 解析、`ConsoleLayout` 死按钮与图标区分；修复 `.quality-grid`/`.console-metric-row`/`.trust-*` CSS 冲突并移除死规则；`web/src/test/setup.ts` 兼容 Node 25+/26 全局 `localStorage`。
+- **部署、脚本、测试与文档漂移**：
+  - `alembic/env.py` 直建 `create_async_engine` 避免含 `%` 密码崩溃与泄漏；`.env.production.example` 补 `APM_ENVIRONMENT=production`；`compose.yaml` 透传 12 项缺失运维变量并为 `worker`/`symbolizer`/`alerts`/`migrate` 覆写健康检查；`Dockerfile` 移除未用 `proto`/`eslint.config.js` 拷贝；`scripts/check_secrets.py` 补 `apm1_` ingest key 扫描；`scripts/check_tls_expiry.py` 补 `None` 证书与方括号 IPv6 处理；对齐 3 份 SigNoz 告警模板 `groupBy`；修复 12 处测试 `Settings` 缺 `_env_file=None` 与无效果 secret-leak 断言；同步 `README.md` / `AGENTS.md` / `docs/01,03,04,10,13` 事实漂移。
+- **本轮完整门禁（本机，全部通过）**：Ruff `All checks passed`；mypy `63 source files` 无问题；pytest **609 passed / 1 skipped**（skip 为未配置 `APM_TEST_NDK_BIN`；两轮合计 +11 项回归）；11 版 Alembic SQLite 往返（`upgrade head` / `check` / `downgrade -1` / `upgrade head` / `downgrade base` / `upgrade head` / `check`）无漂移；15 份文档校验、secret scan、`git diff --check` 通过；前端 ESLint / TypeScript / **8 suites 34 tests** / 生产 build 通过（CSS 30.83 kB / gzip 6.74 kB，JS 323.53 kB / gzip 101.77 kB）。本机无 Docker / PostgreSQL，镜像与 PG 集成仍由 CI 验证。
+
+## 2026-11-26 待审查项逐个核验与修复（已并入同日提交，未部署）
+
+- **release discovery 扫描预算（确证问题，已修）**：`/v1/query/releases` 原直接 `GROUP BY` 全窗口、无行数预算。新增 `db/query.py::enforce_release_discovery_budget`，复用 `_execute_bounded`（5s 超时 + PG statement_timeout）做 `LIMIT max_rows+1` 探针，超限返回 `query_budget_exceeded`（422），与既有查询同口径。
+- **release discovery 时间口径不一致（连带确证问题，已修）**：原按 `event_timestamp_ms` 过滤，与 `QueryWindow`（occurrence-time）及其余产品查询不符；聚合与预算探针统一改为 `occurrence_timestamp_ms`。新增回归覆盖超预算拒绝、跨租户不计入、event-time 出窗但 occurrence 在窗仍命中。
+- **`ReleaseSummary.has_data` 冗余（确证，已删）**：全仓仅该响应链使用且恒为 true，无跨 API 复用；从 `query.py` 模型、`api/query.py` 构造与 `web/src/types.ts` 同步移除。
+- **mypy 生成存根报错（确证配置缺陷，已修）**：`exclude` 只挡目录发现、不挡导入跟随，导致 `apm_event_pb2.pyi` 的 15 项 protobuf 存根诊断污染业务检查。新增 `[[tool.mypy.overrides]] module=androidapm_server.generated.apm_event_pb2 ignore_errors=true`，业务 63 文件仍 strict，现 `Success: no issues found in 63 source files`。未改生成文件、未放宽业务规则。
+- **release discovery 访问审计（核验为非问题）**：该端点为 viewer 可读 L0 低基数版本摘要，不含 eventId/安装标识/raw，与其余 L0 聚合一致不逐次审计；不加审计以免 audit_logs 无谓增长。
+- **GitHub CI（已查明）**：`8a328ad` CI success；`b5418d4` CI run 44979310624 在 `Static verification` 失败（即 ASYNC230，上轮已本地修复）。远端该失败为历史记录，需提交+推送后重跑才会转绿；本轮未推送。
+- **TLS 巡检（已查明，正常）**：run #20（2026-11-25 12:52 UTC）success，近 4 次定时巡检均 success，证书自动续期链路工作正常；`/health/ready` 公网返回 `{"status":"ready"}`。
+- **云端验收（外部，未变）**：真机 V3 E2E、OTLP 接收/导出（云端 export=false）、PITR/自动异地、主机安全事件等仍待外部环境，见 docs/13 与云端待建设清单。
+- **本轮完整门禁（本机，全部通过）**：Ruff `All checks passed`；mypy `63 source files` 无问题；pytest **598 passed / 1 skipped**（skip 为未配置 `APM_TEST_NDK_BIN`；新增 release discovery 预算回归）；15 份文档校验、secret scan、`git diff --check` 通过；前端 ESLint / typecheck / **8 suites 31 tests** / 生产 build 通过（JS 320.60 kB，gzip 100.70 kB）。改动共 13 文件，均未提交、未推送、未部署。
+
+## 2026-11-25 全仓审计（文档漂移与发布状态）
+
+- 审计起点：`b5418d4`，工作树初始干净且 `main` 与 `origin/main` 一致。补记其前两次提交：`8a328ad` 增加 release discovery 与控制台筛选持久化；`b5418d4` 修复 Windows extended-length artifact promote 路径。当前云端发布证据仍仅到 `aac2199`，故这两次提交尚无此处记录的部署证据。
+- 确证修复：当前数值契约为 246（含 3 个 network `statusCode`），更新 docs/00、05、09、11 的现状数字；docs/05 补列 `GET /v1/query/releases`。将 release discovery SQL 上限 50 提取为 `MAX_RELEASE_VERSIONS` 常量，保持运行行为不变。
+- 运行证据：本轮尝试门禁时发现当前 shell 找不到 `uv`，未能实际执行 Ruff/mypy/pytest；此前 2026-11-21 最新已记录结果为 597 passed / 1 skipped，不能视为本轮改动已验证。需在具备项目工具链的环境重跑完整 finish checks。
+- 待审查：release discovery 聚合扫描预算及审计是否应与 Trace 等自由字符串查询一致（需评估索引/租户数据量/隐私口径）；`ReleaseSummary.has_data` 在该 endpoint 目前恒为 true，是否保留取决于跨 API 类型约定；前端 bundle 本地构建变化不代表部署；证书 2026-11-26 到期前需查 tls-monitor 与续期结果；GitHub Actions 对上述两提交的 CI 状态需核对。
+- 云端仍待验收：真机 V3 E2E、OTLP 接收与导出、PITR/自动异地副本、主机安全告警处置、audit_logs 留存决策等，以 `docs/13-云端运行环境.md` 和 `云端待建设清单.md` 为准；本地审计不改变这些外部状态。
+
 ## 2026-11-21 晚续轮（跨仓审计 → statusCode 契约 → 异地备份 → 客户端 strict V3 → 二次发布）
 
 - **跨仓覆盖审计**（客户端 AndroidAPM develop `4530fcb`）：客户端 65 个固定 module/name 全部被服务端 66 事件目录覆盖（66 = 65 + 预留 core/session_start）；字符串形态数值兼容；dropReason 22 枚举一致；`threshold` 为配置回显有意不注册；`statusCode` 原仅 raw → 本轮注册。

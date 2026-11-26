@@ -72,6 +72,7 @@ async def web_api(
     (dist / "favicon.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>", encoding="utf-8")
     (assets / "app.js").write_text("export {};", encoding="utf-8")
     settings = Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         environment="test",
         web_dist_path=dist,
@@ -233,9 +234,12 @@ async def test_web_shell_has_security_headers_and_assets_are_immutable(
 
 def test_production_settings_require_secure_cookie_and_strong_session_key() -> None:
     with pytest.raises(ValueError, match="secure cookies"):
-        Settings(environment="production", web_session_hmac_key_b64=TEST_WEB_KEY_B64)
+        Settings(
+            _env_file=None, environment="production", web_session_hmac_key_b64=TEST_WEB_KEY_B64
+        )
     with pytest.raises(ValueError, match="at least 32 bytes"):
         Settings(
+            _env_file=None,
             environment="production",
             web_session_cookie_secure=True,
             web_session_hmac_key_b64=base64.b64encode(b"short").decode(),

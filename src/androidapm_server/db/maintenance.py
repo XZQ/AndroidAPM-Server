@@ -7,6 +7,7 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import and_, delete, exists, func, or_, select, text, tuple_
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from androidapm_server.config import Settings
@@ -58,6 +59,10 @@ async def check_inbox_capacity(session: AsyncSession, settings: Settings) -> Non
                 return
     except TimeoutError as error:
         raise _capacity_error() from error
+    except DBAPIError as error:
+        if getattr(error.orig, "sqlstate", None) == "57014":
+            raise _capacity_error() from error
+        raise
     raise _capacity_error()
 
 

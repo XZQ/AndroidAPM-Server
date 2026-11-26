@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from androidapm_server.auth import PASSWORD_HASHER
-from androidapm_server.auth_budget import AUTH_ATTEMPTS, HASH_VERIFIER
+from androidapm_server.auth_budget import AUTH_ATTEMPTS, HASH_VERIFIER, dummy_argon2_hash
 from androidapm_server.db.models import CiKey, Tenant
 from androidapm_server.errors import ApiError
 
@@ -19,7 +19,6 @@ CI_KEY_PREFIX = "apmci1"
 CI_KEY_SEPARATOR = "_"
 CI_KEY_ID_BYTES = 9
 CI_KEY_SECRET_BYTES = 32
-CI_DUMMY_HASH = PASSWORD_HASHER.hash("dummy-ci-credential-secret")
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +94,7 @@ def _parse_ci_bearer(authorization: str | None) -> tuple[str, str]:
 async def _verify_dummy(secret: str) -> None:
     """Narrow timing differences when an unknown CI key id is supplied."""
     try:
-        await HASH_VERIFIER.verify(PASSWORD_HASHER.verify, CI_DUMMY_HASH, secret)
+        await HASH_VERIFIER.verify(PASSWORD_HASHER.verify, dummy_argon2_hash(), secret)
     except (InvalidHashError, VerificationError, VerifyMismatchError):
         pass
 

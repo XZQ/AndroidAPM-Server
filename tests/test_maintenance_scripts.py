@@ -14,6 +14,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 KEY_B64 = base64.b64encode(b"k" * 32).decode("ascii")
+CURSOR_KEY_B64 = base64.b64encode(b"c" * 32).decode("ascii")
+SESSION_KEY_B64 = base64.b64encode(b"s" * 32).decode("ascii")
 
 
 def load(name: str) -> ModuleType:
@@ -30,8 +32,8 @@ def valid_configuration() -> dict[str, str]:
     return {
         "APM_ENVIRONMENT": "production",
         "APM_WEB_SESSION_COOKIE_SECURE": "true",
-        "APM_WEB_SESSION_HMAC_KEY_B64": KEY_B64,
-        "APM_QUERY_CURSOR_HMAC_KEY_B64": KEY_B64,
+        "APM_WEB_SESSION_HMAC_KEY_B64": SESSION_KEY_B64,
+        "APM_QUERY_CURSOR_HMAC_KEY_B64": CURSOR_KEY_B64,
         "APM_INSTALLATION_HMAC_KEYS_JSON": json.dumps({"v1": KEY_B64}),
         "APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION": "v1",
         "POSTGRES_PASSWORD": "a" * 24,
@@ -52,7 +54,33 @@ def test_example_env_file_is_rejected_without_printing_values() -> None:
     failures = config.validate(values)
     assert any("APM_WEB_SESSION_HMAC_KEY_B64" in failure for failure in failures)
     assert any("POSTGRES_PASSWORD" in failure for failure in failures)
-    assert all(KEY_B64 not in failure for failure in failures)
+    # No configured value from the example file (or a real weak secret) may be echoed.
+    for value in values.values():
+        if len(value) >= 12:
+            assert all(value not in failure for failure in failures)
+    crafted = valid_configuration()
+    secret_marker = base64.b64encode(b"short-secret-marker").decode("ascii")
+    crafted["APM_QUERY_CURSOR_HMAC_KEY_B64"] = secret_marker
+    crafted_failures = config.validate(crafted)
+    assert any("APM_QUERY_CURSOR_HMAC_KEY_B64" in failure for failure in crafted_failures)
+    assert all(secret_marker not in failure for failure in crafted_failures)
+
+
+def test_production_example_passes_after_replacing_placeholders() -> None:
+    """Replacing every documented placeholder in .env.production.example must pass validation."""
+    config = load("check_production_config")
+    values = config.parse_env_file(ROOT / ".env.production.example")
+    values.update(
+        {
+            "APM_DOMAIN": "apm.company.net",
+            "POSTGRES_PASSWORD": "a" * 24,
+            "APM_OTLP_LOGS_ENDPOINT": "https://otlp.company.net/v1/logs",
+            "APM_INSTALLATION_HMAC_KEYS_JSON": json.dumps({"v1": KEY_B64}),
+            "APM_QUERY_CURSOR_HMAC_KEY_B64": base64.b64encode(b"q" * 32).decode("ascii"),
+            "APM_WEB_SESSION_HMAC_KEY_B64": base64.b64encode(b"w" * 32).decode("ascii"),
+        }
+    )
+    assert config.validate(values) == []
 
 
 def test_compose_injected_database_url_is_not_required_in_env_file() -> None:
@@ -135,11 +163,44 @@ def test_default_threshold_accepts_a_fresh_short_lived_certificate() -> None:
     assert fresh > expiry.DEFAULT_MIN_DAYS
 
 
+def test_reused_hmac_keys_across_domains_are_rejected() -> None:
+    config = load("check_production_config")
+    values = valid_configuration()
+    values["APM_QUERY_CURSOR_HMAC_KEY_B64"] = values["APM_WEB_SESSION_HMAC_KEY_B64"]
+    failures = config.validate(values)
+    assert any("must not reuse" in failure for failure in failures)
+    assert all(SESSION_KEY_B64 not in failure for failure in failures)
+
+    ring_reuse = valid_configuration()
+    ring_reuse["APM_INSTALLATION_HMAC_KEYS_JSON"] = json.dumps({"v1": SESSION_KEY_B64})
+    ring_failures = config.validate(ring_reuse)
+    assert any("must not reuse" in failure for failure in ring_failures)
+
+
 def test_secret_scan_flags_real_keys_but_not_fixtures_or_placeholders() -> None:
     secrets = load("check_secrets")
+    assert "ingest key" in secrets.findings(f"Authorization: Bearer apm1_{'B' * 40}")
     assert "query key" in secrets.findings(f"login('apmq1_{'A' * 40}')")
     assert secrets.findings("login('apmq1_key_secret')") == []
     assert secrets.findings("APM_QUERY_CURSOR_HMAC_KEY_B64=replace-with-me") == []
     assert "assigned secret value" in secrets.findings(
         f"APM_QUERY_CURSOR_HMAC_KEY_B64={KEY_B64}"
+    )
+    assert "assigned database URL password" in secrets.findings(
+        "APM_DATABASE_URL=postgresql+asyncpg://apm:SuperSecretProd99!@db.internal:5432/apm"
+    )
+    assert (
+        secrets.findings(
+            "APM_DATABASE_URL=postgresql+asyncpg://androidapm:change-me@localhost:5432/androidapm"
+        )
+        == []
+    )
+    assert "assigned installation HMAC key ring" in secrets.findings(
+        f'APM_INSTALLATION_HMAC_KEYS_JSON={{"v1":"{KEY_B64}"}}'
+    )
+    assert (
+        secrets.findings(
+            'APM_INSTALLATION_HMAC_KEYS_JSON={"v1":"replace-with-base64-32-byte-secret"}'
+        )
+        == []
     )

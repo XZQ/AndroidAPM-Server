@@ -44,6 +44,7 @@ class PreparedEvent:
     event: ApmEvent
     payload: dict[str, Any]
     payload_hash: str
+    payload_size_bytes: int
     app_version: str | None
     app_build: str | None
     version_code: str | None
@@ -189,8 +190,8 @@ def _prepare_unique_events(
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
-        )
-        if len(serialized.encode("utf-8")) > MAX_EVENT_JSON_BYTES:
+        ).encode("utf-8")
+        if len(serialized) > MAX_EVENT_JSON_BYTES:
             raise ApiError(
                 413,
                 "payload_too_large",
@@ -201,7 +202,8 @@ def _prepare_unique_events(
         item = PreparedEvent(
             event=item.event,
             payload=item.payload,
-            payload_hash=hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+            payload_hash=hashlib.sha256(serialized).hexdigest(),
+            payload_size_bytes=len(serialized),
             app_version=item.app_version,
             app_build=item.app_build,
             version_code=item.version_code,
@@ -349,6 +351,7 @@ def _prepare_event(
         event=safe_event,
         payload=payload,
         payload_hash="",
+        payload_size_bytes=0,
         app_version=app_version,
         app_build=app_build,
         version_code=version_code,
@@ -524,9 +527,7 @@ def _to_row(metadata: IngestMetadata, prepared: PreparedEvent) -> dict[str, Any]
         "timestamp_quality": TIMESTAMP_QUALITY_EVENT_DECLARED,
         "payload_json": prepared.payload,
         "payload_sha256": prepared.payload_hash,
-        "payload_size_bytes": len(
-            json.dumps(prepared.payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        ),
+        "payload_size_bytes": prepared.payload_size_bytes,
         "normalization_version": NORMALIZATION_VERSION,
         "normalized_json": normalization.normalized_json,
         "incident_fingerprint": normalization.incident_fingerprint,

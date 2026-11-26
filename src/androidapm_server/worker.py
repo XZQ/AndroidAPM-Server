@@ -19,7 +19,7 @@ from androidapm_server.constants import INBOX_STATUS_PROCESSING
 from androidapm_server.db.leases import lease_claim_time, lease_write_time, new_lease_owner
 from androidapm_server.db.maintenance import maintain_once
 from androidapm_server.db.models import InboxEvent
-from androidapm_server.db.session import get_session_factory
+from androidapm_server.db.session import close_engine, get_session_factory
 from androidapm_server.db.worker import claim_batch, mark_delivered, mark_failed
 from androidapm_server.logging import configure_logging
 from androidapm_server.metrics import EXPORT_EVENTS, EXPORT_REQUEST_SECONDS, WORKER_CYCLE_TIMESTAMP
@@ -102,14 +102,18 @@ async def export_once(
             return completed_exhausted
 
     owned_clients: list[OtlpLogsClient] = []
-    if metrics_client is None and any("metrics" in e.export_signal_states_json for e in events):
+    if metrics_client is None and any(
+        e.export_signal_states_json.get("metrics") == "pending" for e in events
+    ):
         metrics_client = OtlpMetricsClient(
             settings.otlp_metrics_endpoint,
             settings.otlp_headers_json,
             settings.otlp_timeout_seconds,
         )
         owned_clients.append(metrics_client)
-    if traces_client is None and any("traces" in e.export_signal_states_json for e in events):
+    if traces_client is None and any(
+        e.export_signal_states_json.get("traces") == "pending" for e in events
+    ):
         traces_client = OtlpTracesClient(
             settings.otlp_traces_endpoint, settings.otlp_headers_json, settings.otlp_timeout_seconds
         )
@@ -130,27 +134,25 @@ async def export_once(
                 continue
             # Each signal gets a fresh bounded lease. Never initiate a subsequent signal
             # after this claim was stolen or expired during an earlier export.
-            live = []
             async with factory() as session:
                 observed = await lease_claim_time(session)
-                for event in pending:
-                    renewal = await session.execute(
-                        update(InboxEvent)
-                        .where(
-                            InboxEvent.id == event.id,
-                            InboxEvent.status == INBOX_STATUS_PROCESSING,
-                            InboxEvent.lease_owner == owner,
-                            InboxEvent.lease_expires_at > lease_write_time(session),
-                        )
-                        .values(
-                            lease_expires_at=observed
-                            + timedelta(seconds=settings.worker_lease_seconds)
-                        )
+                renewal = await session.execute(
+                    update(InboxEvent)
+                    .where(
+                        InboxEvent.id.in_([event.id for event in pending]),
+                        InboxEvent.status == INBOX_STATUS_PROCESSING,
+                        InboxEvent.lease_owner == owner,
+                        InboxEvent.lease_expires_at > lease_write_time(session),
                     )
-                    if renewal.rowcount:  # type: ignore[attr-defined]
-                        live.append(event)
+                    .values(
+                        lease_expires_at=observed
+                        + timedelta(seconds=settings.worker_lease_seconds)
+                    )
+                    .returning(InboxEvent.id)
+                )
+                live_ids = set(renewal.scalars().all())
                 await session.commit()
-            pending = live
+            pending = [event for event in pending if event.id in live_ids]
             if not pending:
                 continue
             payload, exportable, invalid, empty = _encode_signal(pending, signal, builder)
@@ -189,40 +191,47 @@ async def export_once(
         for transport in owned_clients:
             await transport.close()
     outcomes: dict[str, int] = {}
+    delivered_ids: list[int] = []
+    failed_events: list[tuple[InboxEvent, bool]] = []
+    for event in events:
+        states = event.export_signal_states_json
+        retryable = "pending" in states.values()
+        failed = "failed" in states.values()
+        if not retryable and not failed:
+            delivered_ids.append(event.id)
+        else:
+            failed_events.append((event, retryable))
     async with factory() as session:
         completed = 0
-        for event in events:
-            states = event.export_signal_states_json
-            retryable = "pending" in states.values()
-            failed = "failed" in states.values()
-            if not retryable and not failed:
-                count = await mark_delivered(session, owner, [event.id])
-                label = "delivered"
-            else:
-                error = errors.get(
-                    event.id,
-                    ExportResult(
-                        False,
-                        retryable,
-                        event.last_error_code or "otlp_signal_failed",
-                        event.last_error_message or "A required OTLP signal was not delivered",
-                    ),
-                )
-                count = await mark_failed(
-                    session,
-                    owner,
-                    [event],
+        if delivered_ids:
+            count = await mark_delivered(session, owner, delivered_ids)
+            outcomes["delivered"] = outcomes.get("delivered", 0) + count
+            completed += count
+        for event, retryable in failed_events:
+            error = errors.get(
+                event.id,
+                ExportResult(
+                    False,
                     retryable,
-                    settings.worker_max_attempts,
-                    error.error_code or "unknown_export_error",
-                    error.error_message or "OTLP export failed",
-                    error.retry_after_seconds,
-                )
-                label = (
-                    "retry"
-                    if retryable and event.attempt_count < settings.worker_max_attempts
-                    else "dead_letter"
-                )
+                    event.last_error_code or "otlp_signal_failed",
+                    event.last_error_message or "A required OTLP signal was not delivered",
+                ),
+            )
+            count = await mark_failed(
+                session,
+                owner,
+                [event],
+                retryable,
+                settings.worker_max_attempts,
+                error.error_code or "unknown_export_error",
+                error.error_message or "OTLP export failed",
+                error.retry_after_seconds,
+            )
+            label = (
+                "retry"
+                if retryable and event.attempt_count < settings.worker_max_attempts
+                else "dead_letter"
+            )
             outcomes[label] = outcomes.get(label, 0) + count
             completed += count
         await session.commit()
@@ -338,7 +347,7 @@ async def worker_loop() -> None:
                         except asyncio.CancelledError:
                             raise
                         except Exception:
-                            logger.warning("retention_cycle_failed")
+                            logger.warning("retention_cycle_failed", exc_info=True)
                     changed = await export_once(client, owner, metrics_client, traces_client)
                     WORKER_CYCLE_TIMESTAMP.labels("export").set(time.time())
                     if changed == 0:
@@ -352,6 +361,7 @@ async def worker_loop() -> None:
         await client.close()
         await metrics_client.close()
         await traces_client.close()
+        await close_engine()
         logger.info("worker_stopped", owner=owner)
 
 

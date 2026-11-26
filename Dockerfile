@@ -6,7 +6,7 @@ RUN corepack enable && corepack prepare pnpm@11.19.0 --activate
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/index.html web/tsconfig.json web/tsconfig.app.json web/tsconfig.node.json ./
-COPY web/vite.config.ts web/eslint.config.js ./
+COPY web/vite.config.ts ./
 COPY web/src ./src
 COPY web/public ./public
 RUN pnpm run build
@@ -32,7 +32,6 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY alembic.ini ./
 COPY alembic ./alembic
-COPY proto ./proto
 COPY scripts ./scripts
 COPY src ./src
 COPY --from=web-builder /web/dist ./web/dist

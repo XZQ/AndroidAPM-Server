@@ -53,7 +53,9 @@ async def test_production_engine_hides_bound_parameters(monkeypatch: pytest.Monk
     monkeypatch.setattr(
         database,
         "get_settings",
-        lambda: Settings(database_url="sqlite+aiosqlite:///:memory:", environment="test"),
+        lambda: Settings(
+            _env_file=None, database_url="sqlite+aiosqlite:///:memory:", environment="test"
+        ),
     )
     engine = database.get_engine()
     try:
@@ -61,3 +63,11 @@ async def test_production_engine_hides_bound_parameters(monkeypatch: pytest.Monk
     finally:
         await engine.dispose()
         database.get_engine.cache_clear()
+
+
+def test_safe_exception_formatter_handles_empty_exc_info_and_unknown_level() -> None:
+    from androidapm_server.logging import SafeExceptionFormatter, configure_logging
+
+    formatter = SafeExceptionFormatter("%(message)s")
+    assert formatter.formatException((None, None, None)) == ""
+    configure_logging("NOT_A_REAL_LEVEL")

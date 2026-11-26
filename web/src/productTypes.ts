@@ -1,4 +1,4 @@
-import type { QueryState } from "./types";
+import type { QueryScope, QueryState, QueryWindow } from "./types";
 
 export interface Observation {
   state: QueryState; sampleCount: number; eventCount: number; missingCount: number;
@@ -20,12 +20,13 @@ export interface WeightedFps {
   unavailableCount: number; coverage: number | null;
 }
 export interface PerformanceResponse {
-  requestId: string; newRelease: string; baselineRelease: string; fromMs: number; toMs: number;
+  requestId: string; scope?: QueryScope; newRelease: string; baselineRelease: string; fromMs: number; toMs: number;
+  source?: string; semantics?: string; eventCounts?: Record<string, number>;
   metrics: PerformanceMetric[]; trendMetric: string;
   trend: { fromMs: number; toMs: number; current: Observation; baseline: Observation }[];
   lateCount: number; nonOccurrenceCount: number; networkErrorRatio: number | null; jankRatio: number | null;
   eventStatistics: { module: string; name: string; label: string; currentCount: number; baselineCount: number; totalCount: number; nonOccurrenceCount: number }[];
-  dimensions: { id: string; label: string; current: CategoryObservation; baseline: CategoryObservation }[];
+  dimensions: { id: string; module?: string; name?: string; field?: string; label: string; current: CategoryObservation; baseline: CategoryObservation }[];
   weightedFps: WeightedFps; baselineWeightedFps: WeightedFps;
 }
 export interface AlertInput {
@@ -43,17 +44,18 @@ export interface AlertsResponse {
   deliveries: { id: number; instanceId: number; transition: string; channel: string; status: string; attemptCount: number; lastError: string | null; deliveredAt: string | null }[];
 }
 export interface SettingsResponse {
+  scope?: QueryScope;
   displayName: string; role: string; pipeline: Record<string, number>; symbolJobs: Record<string, number>;
   operations: Record<string, boolean | number>;
   artifacts: { id: number; type: string; versionCode: string; appBuild: string; variant: string; abi: string | null; buildId: string | null; sha256: string; status: string }[];
 }
 export type KeyKind = "query" | "ingest" | "ci";
 export interface Credential {
-  kind: KeyKind; id: string; description: string; role: string | null; active: boolean;
+  kind: KeyKind; id: string; description: string | null; role: string | null; active: boolean;
   expiresAt: string | null; revokedAt: string | null; createdAt: string; current: boolean;
 }
 export interface KeyInput {
-  kind: KeyKind; role: "viewer" | "investigator" | "admin"; description: string; expiresDays: number;
+  kind: KeyKind; role?: "viewer" | "investigator" | "admin"; description: string; expiresDays: number;
 }
 export interface ConfigHistory {
   signingConfigured: boolean; publicKey: string | null; keyId: string;
@@ -69,6 +71,7 @@ export interface TraceSummary {
   invalidRelationCount: number; lateCount: number; coverageState: string; state: QueryState;
 }
 export interface TraceList {
+  requestId?: string; scope?: QueryScope; window?: QueryWindow; source?: string;
   state: QueryState; sampleCount: number; invalidSpanCount: number; expiredSpanCount: number;
   traceCount: number; durationSampleCount: number; meanSpanDurationMs: number | null;
   p95SpanDurationMs: number | null; items: TraceSummary[]; truncated: boolean;
@@ -79,4 +82,7 @@ export interface SpanObservation {
   timingState: string; relationState: string; customAttributeCount: number; occurrenceTimestampMs: number;
   late: boolean; releaseVersion: string | null; releaseIdentityQuality: string;
 }
-export interface TraceDetail { summary: TraceSummary; spans: SpanObservation[] }
+export interface TraceDetail {
+  requestId?: string; scope?: QueryScope; window?: QueryWindow;
+  summary: TraceSummary; spans: SpanObservation[];
+}

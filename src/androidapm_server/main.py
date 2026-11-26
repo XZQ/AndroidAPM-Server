@@ -19,6 +19,7 @@ from androidapm_server.api.remote_config import router as remote_config_router
 from androidapm_server.api.traces import router as traces_router
 from androidapm_server.api.web import router as web_router
 from androidapm_server.api.web import ui_router as web_ui_router
+from androidapm_server.auth_budget import HASH_VERIFIER
 from androidapm_server.config import get_settings
 from androidapm_server.db.session import close_engine
 from androidapm_server.errors import ApiError, api_error_handler, unhandled_error_handler
@@ -34,16 +35,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     configure_logging(settings.log_level)
     logger.info("application_started", environment=settings.environment)
     yield
+    HASH_VERIFIER.close()
     await close_engine()
     logger.info("application_stopped")
 
 
 def create_app() -> FastAPI:
     """Create a dependency-injectable Gateway application."""
+    is_production = get_settings().environment.lower() == "production"
     app = FastAPI(
         title="AndroidAPM Gateway",
         version="0.1.0",
-        docs_url="/docs" if get_settings().environment != "production" else None,
+        docs_url=None if is_production else "/docs",
+        openapi_url=None if is_production else "/openapi.json",
         redoc_url=None,
         lifespan=lifespan,
     )

@@ -31,7 +31,7 @@ export function IssuesPage() {
     const query = search.trim().toLowerCase();
     return (data?.items ?? []).filter((item) =>
       (family === "ALL" || item.eventFamily === family)
-      && (query === "" || item.fingerprint.includes(query) || item.eventFamily.toLowerCase().includes(query)),
+      && (query === "" || item.fingerprint.toLowerCase().includes(query) || item.eventFamily.toLowerCase().includes(query)),
     );
   }, [data, family, search]);
   const appPath = `/apps/${encodeURIComponent(session.scope.appId)}`;
@@ -68,7 +68,7 @@ export function IssuesPage() {
                     <td><strong>{item.eventFamily}</strong><code>{shortId(item.fingerprint, 12)}</code></td>
                     <td>{item.eventCount}</td><td>{item.affectedInstallationCount ?? "—"}</td>
                     <td>{formatDateTime(item.firstSeenMs)}</td><td>{formatDateTime(item.lastSeenMs)}</td>
-                    <td><Link to={`${appPath}/issues/${item.fingerprint}`} aria-label={`打开 ${item.eventFamily} Issue`}><ArrowRight size={16} /></Link></td>
+                    <td><Link to={`${appPath}/issues/${encodeURIComponent(item.fingerprint)}`} aria-label={`打开 ${item.eventFamily} Issue`}><ArrowRight size={16} /></Link></td>
                   </tr>
                 ))}</tbody>
               </table>

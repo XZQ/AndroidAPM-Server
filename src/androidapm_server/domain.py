@@ -96,11 +96,11 @@ class OccurrenceContext(BaseModel):
     @field_validator("session_id")
     @classmethod
     def validate_session_id(cls, value: str | None) -> str | None:
-        """Accept an anonymous UUID captured by the runtime, never an arbitrary user ID."""
+        """Accept an anonymous UUID captured by the runtime and canonicalize casing/hyphens."""
         if value is not None:
             if value != value.strip() or len(value) not in (32, 36):
                 raise ValueError("session identity must be an anonymous UUID")
-            UUID(value)
+            return str(UUID(value))
         return value
 
     @field_validator("device_model", "os_version")
@@ -124,9 +124,14 @@ class OccurrenceContext(BaseModel):
     )
     @classmethod
     def validate_occurrence_identity(cls, value: str) -> str:
-        """Require complete, trimmed, bounded occurrence identity values."""
-        if not value or value != value.strip() or len(value.encode("utf-8")) > MAX_IDENTIFIER_BYTES:
-            raise ValueError("occurrence identity must contain 1-256 trimmed UTF-8 bytes")
+        """Require complete, trimmed, printable, bounded occurrence identity values."""
+        if (
+            not value
+            or value != value.strip()
+            or len(value.encode("utf-8")) > MAX_IDENTIFIER_BYTES
+            or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+        ):
+            raise ValueError("occurrence identity must contain 1-256 trimmed printable UTF-8 bytes")
         return value
 
     @field_validator("version_code")

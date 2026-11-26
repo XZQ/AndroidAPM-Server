@@ -27,6 +27,15 @@ INBOX_STATES = ("pending", "processing", "awaiting_symbols", "delivered", "dead_
 SNAPSHOT_TIMEOUT_SECONDS = 3
 
 
+def _mark_snapshot_unavailable() -> None:
+    """Signal failed inbox observation without zero-filling backlog gauges."""
+    INBOX_SNAPSHOT_AVAILABLE.set(0)
+    INBOX_PENDING.set(float("nan"))
+    INBOX_OLDEST_SECONDS.set(float("nan"))
+    for status in INBOX_STATES:
+        INBOX_ROWS.labels(status).set(float("nan"))
+
+
 async def refresh_inbox_metrics(session: AsyncSession, now: datetime | None = None) -> bool:
     """Observe exact backlog state; failed observations must not look like an empty inbox."""
     observed = now or datetime.now(UTC)
@@ -48,11 +57,7 @@ async def refresh_inbox_metrics(session: AsyncSession, now: datetime | None = No
             )
             rows = result.all()
     except Exception:
-        INBOX_SNAPSHOT_AVAILABLE.set(0)
-        INBOX_PENDING.set(float("nan"))
-        INBOX_OLDEST_SECONDS.set(float("nan"))
-        for status in INBOX_STATES:
-            INBOX_ROWS.labels(status).set(float("nan"))
+        _mark_snapshot_unavailable()
         return False
     counts = {row[0]: row[1] for row in rows}
     oldest = min((row[3] for row in rows if row[3] is not None), default=None)
@@ -71,8 +76,13 @@ async def _snapshot_loop(interval: float) -> None:
     """Refresh independently of an exporter waiting on the downstream service."""
     factory = get_session_factory()
     while True:
-        async with factory() as session:
-            await refresh_inbox_metrics(session)
+        try:
+            async with factory() as session:
+                await refresh_inbox_metrics(session)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _mark_snapshot_unavailable()
         await asyncio.sleep(interval)
 
 

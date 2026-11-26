@@ -12,13 +12,13 @@
 | --- | --- |
 | 技术栈 | Python 3.11 / FastAPI / SQLAlchemy 2；`uv` 锁后端依赖，`pnpm` 锁前端依赖 |
 | 持久化 | PostgreSQL 是生产 inbox；SQLite 只用于兼容性测试与本地预览 |
-| 迁移 | Alembic 十版，head `20261115_0010`，发布前先升级 |
+| 迁移 | Alembic 十一版，head `20261126_0011`，发布前先升级 |
 | 统计口径 | Normalization v4：246 数值字段 / 66 精确事件 / 29 固定类别（以 [统计契约](docs/12-统计契约与口径.md) 为准） |
 | SDK 契约 | 客户端仍是 durable **V4**；服务端字段 7–9 为向后兼容 optional 扩展，标准 `session_start` / device / OS / span v2 尚未由客户端上报 |
 | 云端 | 首尔轻量应用服务器上的 HTTPS 服务已上线，运行事实见 [云端运行环境](docs/13-云端运行环境.md) |
 | 验收 | SigNoz 真实接收、通知渠道、备份/PITR、SSO/KMS、真机采集与容量/soak **仍未通过** |
 
-> **公网可达不等于生产验收通过。** 云端配置尚未回收纳管，仓库改动也不会自动同步到线上。
+> **公网可达不等于生产验收通过。** 仓库改动不会自动同步到线上，发布须按 runbook 执行并重新验证。
 
 ## 能力概览
 
@@ -62,7 +62,7 @@ AndroidAPM SDK (至少一次投递)
 powershell -ExecutionPolicy Bypass -File scripts\start-local.ps1
 ```
 
-打开 `http://127.0.0.1:8080` 并粘贴终端打印的 Query key。可选参数：`-PrepareOnly`、`-SkipSeed`、`-SkipSync`、`-ClientRepo <AndroidAPM 路径>`。合成数据只是本地 UI fixture，**不是生产证据**；打印的 ingest key 可在 `adb reverse tcp:8080 tcp:8080` 后用于 Android debug 构建。详见 [Web 控制台与本地联调](docs/10-Web控制台与本地联调.md)。
+打开 `http://127.0.0.1:8080` 并从被忽略的 `.local/local-credentials.json` 复制 Query key（脚本刻意不在终端打印明文密钥）。可选参数：`-PrepareOnly`、`-SkipSeed`、`-SkipSync`、`-ClientRepo <AndroidAPM 路径>`。合成数据只是本地 UI fixture，**不是生产证据**；写入 `.local/apm-collector.properties` 的 ingest key 可在 `adb reverse tcp:8080 tcp:8080` 后用于 Android debug 构建。详见 [Web 控制台与本地联调](docs/10-Web控制台与本地联调.md)。
 
 **完整开发栈（需要 PostgreSQL）**：
 
@@ -118,7 +118,7 @@ git diff --check
 
 ## 部署与未完成的验收
 
-云端已有一条运行中的 HTTPS 部署，但**部署形态未纳管**：对外容器带 `public-trial` 前缀、存在空跑 gateway、反代配置与仓库资产存在差异。仓库改动需重新部署才会在线上生效。服务器侧 P0 待办：回收实际 compose / Caddy / 环境变量、处理主机安全事件、为短期证书设置 `APM_PUBLIC_HOST` 仓库变量以启用到期巡检、确认外部 OTLP 接收端与 dead letter、执行备份/PITR 演练。清单见 [云端运行环境](docs/13-云端运行环境.md) 与 [云端待建设清单](docs/云端待建设清单.md)。
+云端已有一条运行中的 HTTPS 部署（部署根 `/opt/androidapm`，运行事实与历史差异见 [云端运行环境](docs/13-云端运行环境.md)）。仓库改动需重新部署才会在线上生效。服务器侧仍待完成：处理主机安全事件、接入外部 OTLP 接收端并开启导出验收、建设自动异地备份与 PITR、绑定正式域名及同步反代配置纳管。清单见 [云端运行环境](docs/13-云端运行环境.md) 与 [云端待建设清单](docs/云端待建设清单.md)。
 
 发布前不得把以下项目标记为通过：真实 SigNoz staging E2E 与 Dashboard/告警、通知渠道触发/恢复、真实 R8/每 ABI 符号化、SSO/KMS/HSM、备份恢复与故障注入、容量与 72h soak、物理设备采集、PostgreSQL 生产并发与 TLS 现场验收。
 

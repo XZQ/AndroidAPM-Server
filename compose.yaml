@@ -2,16 +2,28 @@ name: androidapm-server
 
 x-app-environment: &app-environment
   APM_ENVIRONMENT: local
+  APM_LOG_LEVEL: ${APM_LOG_LEVEL:-INFO}
   APM_DATABASE_URL: postgresql+asyncpg://androidapm:${POSTGRES_PASSWORD:-local-only-change-me}@postgres:5432/androidapm
+  APM_INGEST_ENABLED: ${APM_INGEST_ENABLED:-true}
+  APM_EXPORT_ENABLED: ${APM_EXPORT_ENABLED:-true}
   APM_OTLP_LOGS_ENDPOINT: ${APM_OTLP_LOGS_ENDPOINT:-http://host.docker.internal:4318/v1/logs}
   APM_OTLP_METRICS_ENABLED: ${APM_OTLP_METRICS_ENABLED:-false}
   APM_OTLP_METRICS_ENDPOINT: ${APM_OTLP_METRICS_ENDPOINT:-http://host.docker.internal:4318/v1/metrics}
   APM_OTLP_TRACES_ENABLED: ${APM_OTLP_TRACES_ENABLED:-false}
   APM_OTLP_TRACES_ENDPOINT: ${APM_OTLP_TRACES_ENDPOINT:-http://host.docker.internal:4318/v1/traces}
   APM_OTLP_HEADERS_JSON: '${APM_OTLP_HEADERS_JSON:-{}}'
+  APM_MAX_COMPRESSED_BODY_BYTES: ${APM_MAX_COMPRESSED_BODY_BYTES:-1048576}
+  APM_MAX_DECOMPRESSED_BODY_BYTES: ${APM_MAX_DECOMPRESSED_BODY_BYTES:-8388608}
+  APM_MAX_BATCH_EVENTS: ${APM_MAX_BATCH_EVENTS:-1000}
+  APM_WORKER_BATCH_SIZE: ${APM_WORKER_BATCH_SIZE:-100}
+  APM_WORKER_LEASE_SECONDS: ${APM_WORKER_LEASE_SECONDS:-60}
   APM_INSTALLATION_HMAC_KEYS_JSON: '${APM_INSTALLATION_HMAC_KEYS_JSON:-{}}'
   APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION: ${APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION:-v1}
   APM_ARTIFACT_STORAGE_PATH: /var/lib/androidapm/artifacts
+  APM_MAX_JAVA_MAPPING_BYTES: ${APM_MAX_JAVA_MAPPING_BYTES:-33554432}
+  APM_MAX_NATIVE_ELF_BYTES: ${APM_MAX_NATIVE_ELF_BYTES:-536870912}
+  APM_SYMBOLIZER_BATCH_SIZE: ${APM_SYMBOLIZER_BATCH_SIZE:-20}
+  APM_SYMBOLIZER_LEASE_SECONDS: ${APM_SYMBOLIZER_LEASE_SECONDS:-120}
   APM_SYMBOLIZATION_ENABLED: ${APM_SYMBOLIZATION_ENABLED:-false}
   APM_RETRACE_COMMAND_JSON: '${APM_RETRACE_COMMAND_JSON:-["retrace"]}'
   APM_RETRACE_TOOL_VERSION: ${APM_RETRACE_TOOL_VERSION:-unconfigured}
@@ -65,6 +77,8 @@ services:
     build: .
     command: ["alembic", "upgrade", "head"]
     environment: *app-environment
+    healthcheck:
+      disable: true
     depends_on:
       postgres:
         condition: service_healthy
@@ -94,6 +108,12 @@ services:
     command: ["androidapm-worker"]
     expose: ["9101"]
     environment: *app-environment
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9101/metrics', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -111,6 +131,12 @@ services:
     command: ["androidapm-symbolizer"]
     expose: ["9102"]
     environment: *app-environment
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9102/metrics', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -129,6 +155,8 @@ services:
     build: .
     command: ["androidapm-alerts"]
     environment: *app-environment
+    healthcheck:
+      disable: true
     depends_on:
       migrate:
         condition: service_completed_successfully

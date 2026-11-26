@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from androidapm_server.constants import (
     MAX_IDENTIFIER_BYTES,
+    MAX_MAP_ENTRIES,
     SCHEMA_VERSION_V3,
     SDK_NAME,
     V3_BATCH_ID_HASH_BYTES,
@@ -128,6 +129,10 @@ def _to_event(
         )
     if not message.HasField("occurrence"):
         raise _invalid_event("V3 events require an occurrence snapshot", event_index)
+    if len(message.typed_fields) > MAX_MAP_ENTRIES:
+        raise _invalid_event(f"map exceeds {MAX_MAP_ENTRIES} entries", event_index)
+    if len(message.occurrence.native_frames) > 256:
+        raise _invalid_event("native_frames exceeds 256 frames", event_index)
     fields: dict[str, object] = {}
     field_types: dict[str, str] = {}
     try:

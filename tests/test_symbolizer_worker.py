@@ -132,6 +132,7 @@ def configure_worker(
     tmp_path: Path,
 ) -> Settings:
     settings = Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         environment="test",
         artifact_storage_path=tmp_path,
@@ -210,7 +211,7 @@ async def test_worker_retries_transient_tool_failure_without_releasing_raw_event
 @pytest.mark.parametrize("timeout", [120, 115])
 def test_symbolizer_timeout_cannot_outlive_lease(timeout: int) -> None:
     with pytest.raises(ValueError, match="timeout must be shorter"):
-        Settings(symbolizer_timeout_seconds=timeout, symbolizer_lease_seconds=120)
+        Settings(_env_file=None, symbolizer_timeout_seconds=timeout, symbolizer_lease_seconds=120)
 
 
 def tool_result(stack: str = "Real.run(Real.kt:10)") -> SymbolizationResult:

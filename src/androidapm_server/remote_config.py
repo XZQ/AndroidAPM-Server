@@ -82,7 +82,9 @@ def sign_config(
         payload,
         key_id,
     )
-    private_key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(private_key_b64))
+    private_key = Ed25519PrivateKey.from_private_bytes(
+        base64.b64decode(private_key_b64, validate=True)
+    )
     signature = private_key.sign(_canonical_bytes(unsigned))
     return SignedConfig(
         revision,
@@ -99,8 +101,10 @@ def verify_envelope(public_key_b64: str, envelope: dict[str, Any]) -> None:
     """Verify a response envelope; intended for tests and client reference behavior."""
     signature_b64 = str(envelope["signature"])
     unsigned = {key: value for key, value in envelope.items() if key != "signature"}
-    public_key = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key_b64))
-    public_key.verify(base64.b64decode(signature_b64), _canonical_bytes(unsigned))
+    public_key = Ed25519PublicKey.from_public_bytes(
+        base64.b64decode(public_key_b64, validate=True)
+    )
+    public_key.verify(base64.b64decode(signature_b64, validate=True), _canonical_bytes(unsigned))
 
 
 def rollout_includes(rollout_salt: str, installation_id: str, basis_points: int) -> bool:
@@ -117,6 +121,11 @@ def rollout_includes(rollout_salt: str, installation_id: str, basis_points: int)
     return int.from_bytes(digest[:8], "big") % ROLLOUT_DENOMINATOR < basis_points
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Treat naive datetimes as UTC rather than shifting them by host timezone."""
+    return value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 def _unsigned_envelope(
     revision: int,
     issued_at: datetime,
@@ -128,8 +137,8 @@ def _unsigned_envelope(
     """Build the exact fields covered by the signature."""
     return {
         "revision": revision,
-        "issuedAt": issued_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-        "expiresAt": expires_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "issuedAt": _as_utc(issued_at).isoformat().replace("+00:00", "Z"),
+        "expiresAt": _as_utc(expires_at).isoformat().replace("+00:00", "Z"),
         "rolloutBasisPoints": rollout_basis_points,
         "payload": payload,
         "keyId": key_id,

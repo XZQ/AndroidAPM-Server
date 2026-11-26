@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
+import signal
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -28,6 +31,7 @@ NATIVE_INLINE_BUILD_ID = re.compile(r"\(BuildId:\s*([0-9a-fA-F]+)\)")
 MAX_NATIVE_FRAMES = 256
 MAX_TOOL_OUTPUT_BYTES = 1 * 1_024 * 1_024
 TOOL_READ_CHUNK_BYTES = 64 * 1_024
+TOOL_CLEANUP_TIMEOUT_SECONDS = 2.0
 MAX_FINGERPRINT_LINES = 32
 NativeArtifacts = dict[tuple[str, str], tuple[SymbolArtifact, Path]]
 
@@ -78,9 +82,12 @@ async def symbolize_job(
     if job.job_type == SYMBOL_JOB_NATIVE:
         return await _symbolize_native(
             job,
-            native_artifacts
+            {
+                (abi, (build_id or "").lower()): item
+                for (abi, build_id), item in native_artifacts.items()
+            }
             if native_artifacts is not None
-            else {(artifact.abi, artifact.build_id): (artifact, artifact_path)},
+            else {(artifact.abi, (artifact.build_id or "").lower()): (artifact, artifact_path)},
             llvm_command_json,
             llvm_tool_version,
             timeout_seconds,
@@ -307,12 +314,17 @@ def _parse_command(raw: str, label: str) -> list[str]:
 
 async def _run_tool(args: list[str], standard_input: bytes, timeout_seconds: float) -> str:
     """Execute a trusted binary with concurrent input/output and per-stream memory limits."""
+    popen_kwargs: dict[str, Any] = {}
+    if os.name != "nt":
+        # Isolate the child in its own process group so timeout cleanup kills any grandchildren.
+        popen_kwargs["start_new_session"] = True
     try:
         process = await asyncio.create_subprocess_exec(
             *args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **popen_kwargs,
         )
     except FileNotFoundError as error:
         raise SymbolizationFailure(
@@ -328,22 +340,26 @@ async def _run_tool(args: list[str], standard_input: bytes, timeout_seconds: flo
             await asyncio.gather(*tasks)
             await process.wait()
     except BaseException as error:
-        # An overflowing stream, lease deadline or shutdown must stop the direct child.
+        # An overflowing stream, lease deadline or shutdown must stop the child tree.
         if process.returncode is None:
-            try:
+            sigkill = getattr(signal, "SIGKILL", None)
+            if os.name != "nt" and hasattr(os, "killpg") and sigkill is not None:
+                with suppress(ProcessLookupError, PermissionError):
+                    os.killpg(process.pid, sigkill)
+            with suppress(ProcessLookupError):
                 process.kill()
-            except ProcessLookupError:
-                pass  # The process may have exited between the returncode check and kill.
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        # A killed process can still have a paused/full pipe. Discard buffered bytes while
-        # reaping instead of communicate(), which would reintroduce unbounded buffering.
-        await asyncio.gather(
-            _discard_tool_stream(process.stdout),
-            _discard_tool_stream(process.stderr),
-            process.wait(),
-        )
+        # Bound pipe draining and reaping so a leaked grandchild handle can never outlive
+        # the worker's lease finalization margin.
+        with suppress(TimeoutError):
+            async with asyncio.timeout(TOOL_CLEANUP_TIMEOUT_SECONDS):
+                await asyncio.gather(
+                    _discard_tool_stream(process.stdout),
+                    _discard_tool_stream(process.stderr),
+                    process.wait(),
+                )
         if isinstance(error, TimeoutError):
             raise SymbolizationFailure(
                 "tool_timeout", "The symbolization tool exceeded its time limit", True

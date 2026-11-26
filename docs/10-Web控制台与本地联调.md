@@ -112,7 +112,7 @@ Apm.init(
         resourceContext = ApmResourceContext(
             serviceName = packageName,
             serviceVersion = BuildConfig.VERSION_NAME,
-            deploymentEnvironment = "production",
+            deploymentEnvironment = "local",
             installationId = installation
         ),
         httpHeaderProvider = HttpHeaderProvider {
@@ -220,7 +220,7 @@ docker compose --env-file .env.production \
 
 docker compose --env-file .env.production \
   -f compose.yaml -f compose.production.yaml up -d --build \
-  postgres migrate gateway worker caddy
+  postgres migrate gateway worker alerts caddy
 
 docker compose --env-file .env.production \
   -f compose.yaml -f compose.production.yaml ps

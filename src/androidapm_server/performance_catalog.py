@@ -432,7 +432,6 @@ PERFORMANCE_FIELDS: tuple[PerformanceField, ...] = (
             ("dropCount", "events", "SDK 累计丢弃数"),
             ("dropRate", "ratio", "SDK 丢弃比例"),
             ("queueSize", "events", "SDK 队列长度"),
-            ("queueBytes", "bytes", "SDK 队列字节数"),
             ("avgUploadLatencyMs", "ms", "SDK 平均上传耗时"),
             ("maxUploadLatencyMs", "ms", "SDK 最大上传耗时"),
             ("internalErrorCount", "events", "SDK 内部错误数"),
@@ -440,6 +439,9 @@ PERFORMANCE_FIELDS: tuple[PerformanceField, ...] = (
             ("diagnosticDroppedCount", "events", "SDK 诊断丢弃数"),
             ("diagnosticWriteFailureCount", "events", "SDK 诊断写入失败数"),
         ),
+    ),
+    PerformanceField(
+        "core", "sdk_health", "queueBytes", "bytes", "SDK 队列字节数", field_type="integer"
     ),
     *_fields(
         "core",

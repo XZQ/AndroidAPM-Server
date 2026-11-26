@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from collections.abc import Coroutine
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, TypeVar
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from androidapm_server.auth import generate_ingest_key
 from androidapm_server.ci_auth import generate_ci_key
@@ -22,7 +24,7 @@ from androidapm_server.db.models import (
     RemoteConfigVersion,
     Tenant,
 )
-from androidapm_server.db.session import get_session_factory
+from androidapm_server.db.session import close_engine, get_session_factory
 from androidapm_server.query_auth import generate_query_key
 from androidapm_server.remote_config import generate_signing_keypair, sign_config
 
@@ -86,6 +88,8 @@ async def create_ingest_key(arguments: argparse.Namespace) -> str:
             session.add(Tenant(id=arguments.tenant_id, name=arguments.tenant_name))
         elif tenant.name != arguments.tenant_name:
             raise ValueError("tenant id already exists with a different name")
+        elif not tenant.active:
+            raise ValueError("cannot create credentials for an inactive tenant")
         session.add(
             IngestKey(
                 key_id=key_id,
@@ -135,6 +139,8 @@ async def create_ci_key(arguments: argparse.Namespace) -> str:
             session.add(Tenant(id=arguments.tenant_id, name=arguments.tenant_name))
         elif tenant.name != arguments.tenant_name:
             raise ValueError("tenant id already exists with a different name")
+        elif not tenant.active:
+            raise ValueError("cannot create credentials for an inactive tenant")
         session.add(
             CiKey(
                 key_id=key_id,
@@ -187,6 +193,8 @@ async def create_query_key(arguments: argparse.Namespace) -> str:
             session.add(Tenant(id=arguments.tenant_id, name=arguments.tenant_name))
         elif tenant.name != arguments.tenant_name:
             raise ValueError("tenant id already exists with a different name")
+        elif not tenant.active:
+            raise ValueError("cannot create credentials for an inactive tenant")
         session.add(
             QueryKey(
                 key_id=key_id,
@@ -233,6 +241,10 @@ async def publish_config(arguments: argparse.Namespace) -> int:
 
     factory = get_session_factory()
     async with factory() as session:
+        # Serialize revision numbering against concurrent web/CLI publishes.
+        await session.execute(
+            update(Tenant).where(Tenant.id == arguments.tenant_id).values(active=Tenant.active)
+        )
         tenant = await session.scalar(select(Tenant).where(Tenant.id == arguments.tenant_id))
         if tenant is None or not tenant.active:
             raise ValueError("tenant does not exist or is inactive")
@@ -291,11 +303,26 @@ async def publish_config(arguments: argparse.Namespace) -> int:
     return revision
 
 
+_T = TypeVar("_T")
+
+
+def _run_with_engine(coro: Coroutine[Any, Any, _T]) -> _T:
+    """Run one CLI coroutine and dispose the shared async engine before loop shutdown."""
+
+    async def _wrapper() -> _T:
+        try:
+            return await coro
+        finally:
+            await close_engine()
+
+    return asyncio.run(_wrapper())
+
+
 def run() -> None:
     """Execute a requested administration action and print secrets once."""
     arguments = parser().parse_args()
     if arguments.command == "create-ingest-key":
-        plaintext = asyncio.run(create_ingest_key(arguments))
+        plaintext = _run_with_engine(create_ingest_key(arguments))
         print("Ingest key (shown once):")
         print(plaintext)
         return
@@ -307,17 +334,17 @@ def run() -> None:
         print(public_key)
         return
     if arguments.command == "create-ci-key":
-        plaintext = asyncio.run(create_ci_key(arguments))
+        plaintext = _run_with_engine(create_ci_key(arguments))
         print("CI key (shown once):")
         print(plaintext)
         return
     if arguments.command == "create-query-key":
-        plaintext = asyncio.run(create_query_key(arguments))
+        plaintext = _run_with_engine(create_query_key(arguments))
         print("Query key (shown once):")
         print(plaintext)
         return
     if arguments.command == "publish-config":
-        revision = asyncio.run(publish_config(arguments))
+        revision = _run_with_engine(publish_config(arguments))
         print(f"Published remote config revision: {revision}")
         return
     raise AssertionError(f"Unhandled command: {arguments.command}")

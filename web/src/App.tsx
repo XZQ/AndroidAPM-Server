@@ -22,24 +22,47 @@ import type { QueryFilters, WebSession } from "./types";
 const THEME_KEY = "androidapm-console-theme";
 const FILTERS_KEY = "androidapm-console-filters";
 
+const MAX_WINDOW_MS = 31 * 86_400_000;
+
 /** Restores persisted filters, ignoring malformed or structurally stale payloads. */
 function restoreFilters(): QueryFilters {
+  const fallback = defaultFilters();
   try {
     const raw = localStorage.getItem(FILTERS_KEY);
-    if (raw === null) return defaultFilters();
+    if (raw === null) return fallback;
     const parsed = JSON.parse(raw) as Partial<QueryFilters>;
     if (typeof parsed.newRelease !== "string" || typeof parsed.baselineRelease !== "string") {
-      return defaultFilters();
+      return fallback;
     }
+    const newRelease = parsed.newRelease.trim();
+    const baselineRelease = parsed.baselineRelease.trim();
+    if (!newRelease || !baselineRelease || newRelease === baselineRelease) {
+      return fallback;
+    }
+    const validWindow =
+      typeof parsed.fromMs === "number" &&
+      typeof parsed.toMs === "number" &&
+      Number.isFinite(parsed.fromMs) &&
+      Number.isFinite(parsed.toMs) &&
+      parsed.fromMs > 0 &&
+      parsed.toMs > parsed.fromMs &&
+      parsed.toMs - parsed.fromMs <= MAX_WINDOW_MS;
     return {
-      ...defaultFilters(),
-      newRelease: parsed.newRelease,
-      baselineRelease: parsed.baselineRelease,
-      fromMs: typeof parsed.fromMs === "number" ? parsed.fromMs : defaultFilters().fromMs,
-      toMs: typeof parsed.toMs === "number" ? parsed.toMs : defaultFilters().toMs,
+      newRelease,
+      baselineRelease,
+      fromMs: validWindow ? (parsed.fromMs as number) : fallback.fromMs,
+      toMs: validWindow ? (parsed.toMs as number) : fallback.toMs,
     };
   } catch {
-    return defaultFilters();
+    return fallback;
+  }
+}
+
+function restoreTheme(): boolean {
+  try {
+    return localStorage.getItem(THEME_KEY) !== "light";
+  } catch {
+    return true;
   }
 }
 
@@ -47,7 +70,7 @@ export default function App() {
   const [session, setSession] = useState<WebSession | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [loginMessage, setLoginMessage] = useState<string | null>(null);
-  const [dark, setDarkState] = useState(() => localStorage.getItem(THEME_KEY) !== "light");
+  const [dark, setDarkState] = useState(restoreTheme);
   const [filters, setFilters] = useState<QueryFilters>(restoreFilters);
 
   useEffect(() => {
@@ -62,7 +85,11 @@ export default function App() {
   const setDark: Dispatch<SetStateAction<boolean>> = useCallback((next) => {
     setDarkState((current) => {
       const value = typeof next === "function" ? next(current) : next;
-      localStorage.setItem(THEME_KEY, value ? "dark" : "light");
+      try {
+        localStorage.setItem(THEME_KEY, value ? "dark" : "light");
+      } catch {
+        // Storage may be unavailable (private mode); theme still updates in memory.
+      }
       return value;
     });
   }, []);

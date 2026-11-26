@@ -179,7 +179,6 @@ class ReleaseSummary(QueryModel):
 
     release_version: str
     event_count: int
-    has_data: bool
 
 
 class ReleaseListResponse(QueryModel):
@@ -606,6 +605,7 @@ def build_issue_detail(
         eligible,
         lambda fact: fact.app_version,
         unavailable_reason=OCCURRENCE_UNAVAILABLE_REASON,
+        continuity_reason=continuity_reason,
     )
     scene_distribution = _issue_distribution(
         "scene",
@@ -615,18 +615,21 @@ def build_issue_detail(
         state_for=lambda fact: (
             fact.scene_state or (EVIDENCE_AVAILABLE if fact.scene else EVIDENCE_MISSING)
         ),
+        continuity_reason=continuity_reason,
     )
     unavailable_resource = _issue_distribution(
         "device_model",
         eligible,
         lambda fact: fact.device_model,
         unavailable_reason="STANDARD_DEVICE_RESOURCE_NOT_PROVIDED",
+        continuity_reason=continuity_reason,
     )
     unavailable_os = _issue_distribution(
         "android_version",
         eligible,
         lambda fact: fact.os_version,
         unavailable_reason="STANDARD_OS_RESOURCE_NOT_PROVIDED",
+        continuity_reason=continuity_reason,
     )
     return IssueDetailResponse(
         request_id=request_id,
@@ -646,7 +649,7 @@ def build_issue_detail(
             ),
             default=None,
         ),
-        trend=_issue_trend(eligible, from_ms, to_ms),
+        trend=_issue_trend(eligible, from_ms, to_ms, continuity_reason=continuity_reason),
         releases=release_distribution,
         scenes=scene_distribution,
         device_models=unavailable_resource,
@@ -661,9 +664,9 @@ def _issue_distribution(
     *,
     unavailable_reason: str,
     state_for: Callable[[QueryFact], str] | None = None,
+    continuity_reason: str | None = None,
 ) -> IssueDistribution:
     """Build a deterministic top-10 aggregate for one allow-listed Issue dimension."""
-    continuity_reason = _installation_continuity_reason(facts)
     grouped: dict[str, list[QueryFact]] = defaultdict(list)
     counts: Counter[str] = Counter()
     for fact in facts:
@@ -724,12 +727,13 @@ def _issue_trend(
     facts: list[QueryFact],
     from_ms: int,
     to_ms: int,
+    *,
+    continuity_reason: str | None = None,
 ) -> list[IssueTrendPoint]:
     """Keep unobserved Issue buckets missing, rather than fabricating zero observations."""
     window_ms = to_ms - from_ms
     bucket_ms = query_bucket_ms(from_ms, to_ms)
     bucket_count = (window_ms + bucket_ms - 1) // bucket_ms
-    continuity_reason = _installation_continuity_reason(facts)
     grouped: dict[int, list[QueryFact]] = defaultdict(list)
     for fact in facts:
         bucket_index = (fact.occurrence_timestamp_ms - from_ms) // bucket_ms
@@ -1135,6 +1139,12 @@ def _release_slice(
     java_metric = _count_metric(
         java_count, _sample_count(eligible), as_of_ms, quality_state, quality_reason
     )
+    native_metric = _count_metric(
+        native_count, _sample_count(eligible), as_of_ms, quality_state, quality_reason
+    )
+    tombstone_metric = _count_metric(
+        tombstone_count, _sample_count(eligible), as_of_ms, quality_state, quality_reason
+    )
     anr_metric = _count_metric(
         anr_count, _sample_count(eligible), as_of_ms, quality_state, quality_reason
     )
@@ -1312,12 +1322,8 @@ def _release_slice(
         installation_identity_coverage=installation_coverage,
         metrics=ReleaseMetricSet(
             java_crash_events=java_metric,
-            native_crash_events=_count_metric(
-                native_count, _sample_count(eligible), as_of_ms, quality_state, quality_reason
-            ),
-            native_tombstone_events=_count_metric(
-                tombstone_count, _sample_count(eligible), as_of_ms, quality_state, quality_reason
-            ),
+            native_crash_events=native_metric,
+            native_tombstone_events=tombstone_metric,
             anr_events=anr_metric,
             affected_installations=affected_metric,
             active_installations=active_metric,

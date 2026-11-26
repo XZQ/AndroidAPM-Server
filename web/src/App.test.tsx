@@ -74,3 +74,31 @@ it.each(["new", "baseline"])("keeps the trust banner unavailable when the %s rel
   expect(container.querySelector(".trust-banner .state-badge")).toHaveAttribute("data-state", "UNAVAILABLE");
   expect(screen.getByRole("status")).toHaveTextContent("没有可绘制的趋势数据");
 });
+
+it("never snaps baselineRelease equal to newRelease when discovery returns only baseline", async () => {
+  window.history.pushState({}, "", "/apps/com.example/overview");
+  const healthUrls: string[] = [];
+  const metric = { state: "ZERO", value: 0, numerator: null, denominator: null, sampleCount: 1, coverage: 1, asOfMs: 2000, source: "durable_inbox", reason: null };
+  const metrics = Object.fromEntries(["javaCrashEvents", "anrEvents", "affectedInstallations", "activeInstallations", "affectedInstallationRatio", "sdkDropRate"].map((name) => [name, metric]));
+  const slice = (name: string) => ({ releaseVersion: name, state: "PRESENT", eligibleSampleCount: 1, declaredSampleCount: 1, metrics });
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const path = requestPath(input);
+    if (path === "/v1/web/session") return json({ requestId: "session", scope, role: "viewer", expiresAtMs: Date.now() + 60_000 });
+    if (path.startsWith("/v1/query/releases?")) return json({ requestId: "rel", scope, window: { fromMs: 1, toMs: 2 }, items: [{ releaseVersion: "1.0.0", eventCount: 5 }] });
+    if (path.startsWith("/v1/query/release-health?")) {
+      healthUrls.push(path);
+      return json({ requestId: "health", newRelease: slice("1.0.0"), baselineRelease: slice("1.0.0-baseline"), comparison: {}, trend: [] });
+    }
+    if (path.startsWith("/v1/query/data-quality?")) return json({ state: "PRESENT", releaseIdentity: { coverage: 1 }, installationIdentity: { coverage: 1 } });
+    if (path.startsWith("/v1/query/fingerprints?")) return json({ items: [] });
+    return json({}, 404);
+  });
+  render(<App />);
+  await screen.findByRole("heading", { name: "应用总览" });
+  expect(healthUrls.length).toBeGreaterThan(0);
+  for (const url of healthUrls) {
+    const params = new URLSearchParams(url.split("?")[1]);
+    expect(params.get("newRelease")).toBe("1.0.0");
+    expect(params.get("baselineRelease")).not.toBe("1.0.0");
+  }
+});

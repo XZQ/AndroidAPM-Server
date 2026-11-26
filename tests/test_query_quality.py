@@ -289,3 +289,31 @@ def test_rotation_is_explicit_in_issue_distributions_trend_and_quality() -> None
     assert fingerprints.installation_reason == issue.reason
     quality = build_data_quality("r", PRINCIPAL, facts, "new", TIME - 1, TIME + 1, 1000)
     assert quality.installation_identity.reason == issue.reason
+
+
+def test_native_and_tombstone_counts_stay_present_when_min_installations_gate_fails() -> None:
+    """Exact native/tombstone counts must match java/anr semantics when ratio gates fail."""
+    facts = [
+        fact(id=1, module="crash", name="native_crash", incident_fingerprint="nat-1"),
+        fact(id=2, module="crash", name="tombstone_crash", incident_fingerprint="tomb-1"),
+        fact(id=3, module="core", name="sdk_health", sdk_emit_count=10, sdk_drop_count=0),
+    ]
+    result = build_release_health(
+        "r",
+        PRINCIPAL,
+        facts,
+        "new",
+        "old",
+        TIME - 1,
+        TIME + 1,
+        1000,
+        min_installations=100,
+    )
+    metrics = result.new_release.metrics
+    assert result.new_release.state == "UNAVAILABLE"
+    assert metrics.affected_installation_ratio.reason == "INSUFFICIENT_INSTALLATION_SAMPLE"
+    assert metrics.java_crash_events.value == 0
+    assert metrics.native_crash_events.state == "PRESENT"
+    assert metrics.native_crash_events.value == 1
+    assert metrics.native_tombstone_events.state == "PRESENT"
+    assert metrics.native_tombstone_events.value == 1

@@ -42,7 +42,7 @@
     "description": "P95 drop ratio from exact core/sdk_health events is {{$value}}. This template has no active channel and must remain unrouted until app/environment/version scope, non-empty sample, late-data behavior, trigger and recovery are verified in staging."
   },
   "notificationSettings": {
-    "groupBy": ["service.name", "service.version"],
+    "groupBy": ["service.name", "deployment.environment.name", "service.version"],
     "usePolicy": true,
     "renotify": { "enabled": false, "interval": "30m", "alertStates": [] }
   },

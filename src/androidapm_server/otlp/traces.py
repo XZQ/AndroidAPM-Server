@@ -8,7 +8,7 @@ from opentelemetry.proto.common.v1.common_pb2 import InstrumentationScope
 from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans, ScopeSpans, Span, Status
 
 from androidapm_server.db.models import InboxEvent
-from androidapm_server.otlp.logs import SCOPE_NAME, SCOPE_VERSION, _key_values
+from androidapm_server.otlp.logs import OTLP_SCHEMA_URL, SCOPE_NAME, SCOPE_VERSION, _key_values
 from androidapm_server.otlp.metrics import resource_for, resource_key
 from androidapm_server.tracing import span_for_event
 
@@ -61,6 +61,7 @@ def build_traces_request(events: Iterable[InboxEvent]) -> ExportTraceServiceRequ
                         spans=spans,
                     )
                 ],
+                schema_url=OTLP_SCHEMA_URL,
             )
             for key, spans in grouped.items()
         ]

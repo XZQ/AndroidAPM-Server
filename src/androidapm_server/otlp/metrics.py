@@ -16,8 +16,8 @@ from opentelemetry.proto.metrics.v1.metrics_pb2 import (
 from opentelemetry.proto.resource.v1.resource_pb2 import Resource
 
 from androidapm_server.db.models import InboxEvent
-from androidapm_server.otlp.logs import SCOPE_NAME, SCOPE_VERSION, _key_values
-from androidapm_server.performance_catalog import PERFORMANCE_FIELDS
+from androidapm_server.otlp.logs import OTLP_SCHEMA_URL, SCOPE_NAME, SCOPE_VERSION, _key_values
+from androidapm_server.performance_catalog import PERFORMANCE_FIELDS, PerformanceField
 
 UNIT_MAP = {
     "events": "{event}",
@@ -37,6 +37,13 @@ UNIT_MAP = {
 # The catalog already includes SDK health, including its availability/sample gates.
 # Reconstructing those fields from normalization duplicates points and loses the gates.
 METRIC_FIELDS = PERFORMANCE_FIELDS
+_METRIC_FIELDS_BY_EVENT: dict[tuple[str, str], tuple[PerformanceField, ...]] = {}
+for _metric_field in METRIC_FIELDS:
+    _event_key = (_metric_field.module, _metric_field.name)
+    _METRIC_FIELDS_BY_EVENT[_event_key] = (
+        *_METRIC_FIELDS_BY_EVENT.get(_event_key, ()),
+        _metric_field,
+    )
 
 
 def resource_key(event: InboxEvent) -> tuple[str, str, str, str, str]:
@@ -57,6 +64,7 @@ def resource_for(key: tuple[str, str, str, str, str]) -> Resource:
     tenant, app, environment, version, sdk = key
     attrs = {
         "service.name": app,
+        "android.apm.app_id": app,
         "android.apm.tenant_id": tenant,
         "deployment.environment.name": environment,
         "telemetry.sdk.name": "androidapm",
@@ -72,11 +80,15 @@ def build_metrics_request(events: Iterable[InboxEvent]) -> ExportMetricsServiceR
     grouped: dict[tuple[str, str, str, str, str], dict[str, Metric]] = defaultdict(dict)
     for event in events:
         payload = event.payload_json
+        event_fields = _METRIC_FIELDS_BY_EVENT.get(
+            (str(payload.get("module", "")), str(payload.get("name", ""))),
+            (),
+        )
+        if not event_fields:
+            continue
         normalized = event.normalized_json or {}
         values = normalized.get("registered_fields", {})
-        for field in METRIC_FIELDS:
-            if (payload.get("module"), payload.get("name")) != (field.module, field.name):
-                continue
+        for field in event_fields:
             if field.availability_field and values.get(field.availability_field) is not True:
                 continue
             if field.sample_count_field is not None:
@@ -121,6 +133,7 @@ def build_metrics_request(events: Iterable[InboxEvent]) -> ExportMetricsServiceR
                         metrics=list(metrics.values()),
                     )
                 ],
+                schema_url=OTLP_SCHEMA_URL,
             )
             for key, metrics in grouped.items()
             if metrics

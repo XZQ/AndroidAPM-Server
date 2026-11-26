@@ -124,6 +124,11 @@ class LocalArtifactStore:
             await asyncio.to_thread(path.unlink, missing_ok=True)
             raise
 
+    async def exists(self, storage_key: str) -> bool:
+        """Return whether an immutable artifact file is already present on disk."""
+        destination = self.path_for(storage_key)
+        return await asyncio.to_thread(os.path.exists, _win_longpath(destination))
+
     async def promote(self, staged: StagedArtifact, storage_key: str) -> Path:
         """Atomically promote a validated temporary file to its immutable content key."""
         destination = self.path_for(storage_key)
@@ -131,9 +136,10 @@ class LocalArtifactStore:
         def _promote() -> None:
             # Create the destination directory chain in the same thread right before
             # the rename so it always exists for the call. The \\?\ long-path prefix
-            # keeps renames working when the content-keyed path exceeds MAX_PATH on
-            # Windows hosts with LongPathsEnabled disabled; it is a no-op elsewhere.
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            # keeps directory creation and renames working when the content-keyed path
+            # exceeds MAX_PATH on Windows hosts with LongPathsEnabled disabled; it is
+            # a no-op elsewhere.
+            os.makedirs(_win_longpath(destination.parent), exist_ok=True)
             os.replace(_win_longpath(staged.path), _win_longpath(destination))
 
         await asyncio.to_thread(_promote)
@@ -141,7 +147,14 @@ class LocalArtifactStore:
 
     async def discard(self, path: Path) -> None:
         """Best-effort remove a staging or unregistered immutable file."""
-        await asyncio.to_thread(path.unlink, missing_ok=True)
+
+        def _unlink() -> None:
+            try:
+                os.unlink(_win_longpath(path))
+            except FileNotFoundError:
+                return
+
+        await asyncio.to_thread(_unlink)
 
     def path_for(self, storage_key: str) -> Path:
         """Resolve an internal storage key and reject any traversal outside the root."""

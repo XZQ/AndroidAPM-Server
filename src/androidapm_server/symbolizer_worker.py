@@ -15,7 +15,7 @@ from androidapm_server.config import Settings, get_settings
 from androidapm_server.constants import SYMBOL_JOB_NATIVE, SYMBOLIZER_FINALIZE_MARGIN_SECONDS
 from androidapm_server.db.leases import new_lease_owner
 from androidapm_server.db.models import SymbolizationJob
-from androidapm_server.db.session import get_session_factory
+from androidapm_server.db.session import close_engine, get_session_factory
 from androidapm_server.db.symbolization import (
     claim_symbolization_batch,
     mark_symbolization_failed,
@@ -115,26 +115,24 @@ async def _process_claim(
             modules = await resolve_native_artifacts(session, job)
             artifact = modules[0] if modules else None
             native_artifacts = {
-                (module.abi, module.build_id): (module, store.path_for(module.storage_key))
+                (module.abi, module.build_id.lower()): (module, store.path_for(module.storage_key))
                 for module in modules
             }
         else:
             artifact = await resolve_artifact(session, job)
-    if artifact is None:
-        async with factory() as session:
+        if artifact is None:
             changed = await mark_symbols_missing(
                 session, owner, job.id, "No exact symbol artifact is registered"
             )
             await session.commit()
-        return "symbols_missing" if changed else None
-    if job.attempt_count >= settings.symbolizer_max_attempts:
-        # A process crash after the final tool attempt must not grant an extra attempt.
-        raise SymbolizationFailure(
-            "symbolizer_attempts_exhausted",
-            "The symbolization tool retry budget is exhausted",
-            False,
-        )
-    async with factory() as session:
+            return "symbols_missing" if changed else None
+        if job.attempt_count >= settings.symbolizer_max_attempts:
+            # A process crash after the final tool attempt must not grant an extra attempt.
+            raise SymbolizationFailure(
+                "symbolizer_attempts_exhausted",
+                "The symbolization tool retry budget is exhausted",
+                False,
+            )
         started = await start_symbolization_attempt(
             session, owner, job, settings.symbolizer_max_attempts
         )
@@ -217,6 +215,7 @@ async def symbolizer_loop() -> None:
                     logger.exception("symbolizer_cycle_failed", owner=owner)
                     await asyncio.sleep(settings.symbolizer_poll_seconds)
     finally:
+        await close_engine()
         logger.info("symbolizer_stopped", owner=owner)
 
 

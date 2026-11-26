@@ -162,7 +162,8 @@ def _parse_claims(value: Any) -> WebSessionClaims:
     expires_at = value["exp"]
     csrf_sha256 = value["csrf"]
     if (
-        version != WEB_SESSION_VERSION
+        isinstance(version, bool)
+        or version != WEB_SESSION_VERSION
         or not isinstance(key_id, str)
         or len(key_id) != 18
         or any(character not in "0123456789abcdef" for character in key_id)

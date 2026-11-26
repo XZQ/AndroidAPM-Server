@@ -54,7 +54,7 @@ tenant/app/environment 来自已认证凭据和服务端 scope，不采信 event
 | SDK version | `telemetry.sdk.name=androidapm`、`telemetry.sdk.version` | 已实现 |
 | event process | `process.executable.name` | 已实现 |
 | V2/V3 `installation_id` | `android.apm.installation.hmac` + key version | 已实现假名化；明文不进入 durable payload/OTLP/Query |
-| V3 ABI / GNU build-id | `host.arch`、`android.apm.native.build_id` | schema 与 durable native identity 已实现；真实 Native collector coverage 未验收 |
+| V3 ABI / GNU build-id | 规划：`host.arch`、`android.apm.native.build_id` | schema 与 durable `native_identity_json` 已实现；当前 OTLP Logs 导出器尚未写入这两个属性，真实 Native collector coverage 未验收 |
 | device model / OS / locale / network | 受控 `device.*`、`os.*` 等 | 规划：当前只能来自宿主自定义 context，不能假设存在或可信 |
 
 `installation_id` 必须是宿主生成的匿名稳定安装标识，不得使用 user ID、广告 ID、IMEI、手机号或 Token。HMAC key 属于服务端 secret，按 tenant/domain 版本化；轮换必须支持有限重叠或离线重算，不能把明文写入审计日志。

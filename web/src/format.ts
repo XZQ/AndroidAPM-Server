@@ -13,6 +13,8 @@ const STATE_LABELS: Record<QueryState, string> = {
 
 const REASON_LABELS: Record<string, string> = {
   SESSION_ID_NOT_PROVIDED: "客户端尚未提供标准会话身份",
+  SESSION_KEY_ROTATION_BREAKS_CONTINUITY: "窗口跨越会话密钥轮换，无法合并会话身份",
+  SESSION_START_NOT_IN_WINDOW: "当前窗口内没有有效的会话启动事件",
   OCCURRENCE_IDENTITY_NOT_PROVIDED: "缺少事件发生时版本身份",
   INSTALLATION_IDENTITY_NOT_PROVIDED: "缺少可用安装身份",
   SDK_HEALTH_NOT_PROVIDED: "当前窗口没有 SDK 自健康事件",
@@ -45,6 +47,18 @@ export function reasonLabel(reason: string | null): string | null {
   return REASON_LABELS[reason] ?? reason;
 }
 
+const NUMBER_FORMAT = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 });
+const PERCENT_FORMAT = new Intl.NumberFormat("zh-CN", { style: "percent", maximumFractionDigits: 2 });
+const DATE_TIME_FORMAT = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
 export function formatMetric(metric: MetricResult, kind: "count" | "ratio" = "count"): string {
   if (metric.value === null) return "—";
   if (kind === "ratio") return formatPercent(metric.value);
@@ -52,29 +66,23 @@ export function formatMetric(metric: MetricResult, kind: "count" | "ratio" = "co
 }
 
 export function formatInteger(value: number): string {
-  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(value);
+  return NUMBER_FORMAT.format(value);
+}
+
+export function formatNumber(value: number | null, digits = 2): string {
+  if (value === null || !Number.isFinite(value)) return "—";
+  return Number.isInteger(value) ? String(value) : value.toFixed(digits);
 }
 
 export function formatPercent(value: number | null): string {
   if (value === null) return "—";
-  return new Intl.NumberFormat("zh-CN", {
-    style: "percent",
-    maximumFractionDigits: 2,
-  }).format(value);
+  return PERCENT_FORMAT.format(value);
 }
 
 export function formatDateTime(value: number | string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(date);
+  return DATE_TIME_FORMAT.format(date);
 }
 
 export function shortId(value: string | null, edge = 8): string {

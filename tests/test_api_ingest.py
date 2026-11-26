@@ -59,6 +59,7 @@ async def api() -> AsyncIterator[tuple[AsyncClient, async_sessionmaker[AsyncSess
     app = create_app()
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         environment="test",
         installation_hmac_keys_json=TEST_HMAC_KEYS_JSON,

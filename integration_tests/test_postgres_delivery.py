@@ -78,6 +78,7 @@ def metadata(tenant_id: str, request_id: str) -> IngestMetadata:
     )
 
 
+@pytest.mark.asyncio
 async def test_postgres_accepts_full_protocol_release_identity(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:

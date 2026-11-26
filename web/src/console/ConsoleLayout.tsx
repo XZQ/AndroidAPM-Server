@@ -6,9 +6,9 @@ import {
   BarChart3,
   BellRing,
   Bug,
-  ChevronDown,
   DatabaseZap,
   Gauge,
+  GitBranch,
   LogOut,
   Menu,
   Moon,
@@ -27,15 +27,20 @@ export function ConsoleLayout({ value }: { value: ConsoleContextValue }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const { session, filters, setFilters, dark, setDark } = value;
   const location = useLocation();
-  // Every rendered evidence tree belongs to one immutable route, scope and query snapshot.
-  const evidenceKey = JSON.stringify([location.pathname, location.search, session, filters]);
+  // Windowed evidence routes remount on filter changes so stale evidence never lingers.
+  // Non-windowed routes (settings, alerts, single event detail) ignore topbar time-range
+  // changes so unsaved forms, one-time secrets, and L1 event audits are preserved.
+  const isNonWindowedRoute = /\/(settings|alerts)$|\/events\/[^/]+$/.test(location.pathname);
+  const evidenceKey = isNonWindowedRoute
+    ? JSON.stringify([location.pathname, location.search, session])
+    : JSON.stringify([location.pathname, location.search, session, filters]);
   const appPath = `/apps/${encodeURIComponent(session.scope.appId)}`;
   const nav = [
     { to: `${appPath}/overview`, label: "总览", icon: BarChart3 },
     { to: `${appPath}/issues`, label: "Issues", icon: Bug },
     { to: `${appPath}/explore`, label: "事件探索", icon: Search, investigator: true },
     { to: `${appPath}/performance`, label: "性能分析", icon: Gauge },
-    { to: `${appPath}/traces`, label: "Trace", icon: Activity, investigator: true },
+    { to: `${appPath}/traces`, label: "Trace", icon: GitBranch, investigator: true },
     { to: `${appPath}/releases`, label: "版本发布", icon: Activity },
     { to: `${appPath}/quality`, label: "数据质量", icon: ShieldCheck },
     { to: `${appPath}/alerts`, label: "告警", icon: BellRing },
@@ -82,11 +87,10 @@ export function ConsoleLayout({ value }: { value: ConsoleContextValue }) {
       <div className="console-workspace">
         <header className="console-topbar">
           <button className="mobile-menu" type="button" onClick={() => setMenuOpen(true)} aria-label="打开导航"><Menu size={19} /></button>
-          <button className="scope-selector" type="button" title="应用范围由 Query 凭据固定">
+          <div className="scope-selector" title="应用范围由 Query 凭据固定">
             <span className="scope-signal" />
             <span><strong>{session.scope.appId}</strong><small>{session.scope.environment}</small></span>
-            <ChevronDown size={15} aria-hidden="true" />
-          </button>
+          </div>
           <div className="console-top-actions">
             <label className="range-select">
               <span className="sr-only">查询时间范围</span>

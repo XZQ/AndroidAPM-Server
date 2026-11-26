@@ -100,7 +100,14 @@ async def get_trace_detail(
         raise ApiError(400, "invalid_trace_id", "Trace ID must be nonzero 128-bit hexadecimal")
     release_version = _optional_identifier(release_version, "releaseVersion", MAX_IDENTIFIER_BYTES)
     spans, _, _ = await load_spans(
-        session, principal, settings, from_ms, to_ms, release_version, canonical
+        session,
+        principal,
+        settings,
+        from_ms,
+        to_ms,
+        release_version,
+        canonical,
+        max_rows=min(settings.query_max_rows, MAX_TRACE_DETAIL_SPANS),
     )
     if not spans:
         session.add(

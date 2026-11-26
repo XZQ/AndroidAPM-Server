@@ -87,6 +87,7 @@ async def product() -> AsyncIterator[tuple[AsyncClient, Factory, dict[str, str],
         await session.commit()
     private, public = generate_signing_keypair()
     settings = Settings(
+        _env_file=None,
         environment="test",
         installation_hmac_keys_json=HMAC,
         web_session_hmac_key_b64=base64.b64encode(b"web-test-key-material-32bytesxxxx").decode(),
@@ -488,6 +489,117 @@ async def test_p95_alert_rule_still_fails_closed_over_row_budget(product: Any) -
     assert blocked.json()["code"] == "query_row_limit"
 
 
+async def test_p95_alert_filters_by_event_and_isolated_budget_preserves_sibling_rules(
+    product: Any,
+) -> None:
+    """A p95 rule scans only its own event, and background isolation preserves sibling rules."""
+    from androidapm_server.alerts import evaluate_scope
+
+    client, factory, keys, settings = product
+    settings.query_max_rows = 2
+    p95_rule = {
+        "name": "Launch P95",
+        "metric": "launch.cold_start.launchDurationMs.p95",
+        "threshold": 100,
+        "windowSeconds": 3600,
+    }
+    count_rule = {
+        "name": "Crash Count",
+        "metric": "crash.count",
+        "threshold": 0,
+        "windowSeconds": 3600,
+    }
+    resp_count = await client.post("/v1/alerts/rules", json=count_rule, headers=auth(keys))
+    resp_p95 = await client.post("/v1/alerts/rules", json=p95_rule, headers=auth(keys))
+    assert resp_count.status_code == 201 and resp_p95.status_code == 201
+    # 5 unrelated network events must not trip the Launch P95 rule's row budget of 2.
+    await emit(factory, module="network", name="network_request", values=[{"durationMs": 50}] * 5)
+    await emit(factory, values=[{"launchDurationMs": 120}, {"launchDurationMs": 130}])
+    assert (await client.post("/v1/alerts/evaluate", headers=auth(keys))).status_code == 200
+    # Overflow Launch P95 itself and add a crash; isolated evaluation must still fire Crash Count.
+    await emit(factory, values=[{"launchDurationMs": 140}])
+    await emit(
+        factory,
+        module="crash",
+        name="java_crash",
+        values=[{"stackTrace": "at app.fn(Main.kt:1)"}],
+    )
+    async with factory() as session:
+        evaluated = await evaluate_scope(
+            session,
+            settings,
+            PRINCIPAL,
+            isolate_budget_errors=True,
+        )
+        await session.commit()
+    assert evaluated == 1
+    state = (await client.get("/v1/alerts", headers=auth(keys))).json()
+    by_name = {rule["name"]: rule for rule in state["rules"]}
+    assert by_name["Crash Count"]["state"] == "FIRING"
+
+
+async def test_alerts_read_tolerates_malformed_channels_and_edit_resets_sample_count(
+    product: Any,
+) -> None:
+    client, factory, keys, settings = product
+    rule = {"name": "Crash", "metric": "crash.count", "threshold": 5, "windowSeconds": 3600}
+    created = await client.post("/v1/alerts/rules", json=rule, headers=auth(keys))
+    assert created.status_code == 201
+    rule_id = created.json()["id"]
+    await emit(factory, values=[{"launchDurationMs": 120}] * 2)
+    assert (await client.post("/v1/alerts/evaluate", headers=auth(keys))).status_code == 200
+    edited = await client.put(
+        f"/v1/alerts/rules/{rule_id}",
+        json={**rule, "threshold": 10},
+        headers=auth(keys),
+    )
+    assert edited.status_code == 200
+    assert edited.json()["lastSampleCount"] == 0
+    settings.notification_channels_json = SecretStr("{not-json")
+    readable = await client.get("/v1/alerts", headers=auth(keys))
+    assert readable.status_code == 200
+    assert readable.json()["channels"] == []
+
+
+async def test_signed_alert_thresholds_respect_metric_unit_bounds(product: Any) -> None:
+    client, _factory, keys, _settings = product
+    ratio_ok = await client.post(
+        "/v1/alerts/rules",
+        json={
+            "name": "Heap shrink",
+            "metric": "gc_monitor.memory_churn.heapGrowth.p95",
+            "comparison": "lt",
+            "threshold": -0.25,
+            "windowSeconds": 3600,
+        },
+        headers=auth(keys),
+    )
+    assert ratio_ok.status_code == 201
+    status_ok = await client.post(
+        "/v1/alerts/rules",
+        json={
+            "name": "Transport error sentinel",
+            "metric": "network.network_error.statusCode.p95",
+            "comparison": "lt",
+            "threshold": -1,
+            "windowSeconds": 3600,
+        },
+        headers=auth(keys),
+    )
+    assert status_ok.status_code == 201
+    neg_count = await client.post(
+        "/v1/alerts/rules",
+        json={
+            "name": "Invalid negative count",
+            "metric": "crash.count",
+            "threshold": -1,
+            "windowSeconds": 3600,
+        },
+        headers=auth(keys),
+    )
+    assert neg_count.status_code == 422
+
+
 async def test_count_alert_release_scope_ignores_other_and_batch_declared_releases(
     product: Any,
 ) -> None:
@@ -716,7 +828,9 @@ async def test_outbox_completion_cannot_overwrite_a_lost_lease(product: Any, sto
 @pytest.mark.parametrize("value", ["", "  "])
 def test_empty_signing_environment_is_unconfigured(value: str) -> None:
     assert (
-        Settings(remote_config_signing_private_key_b64=value).remote_config_signing_private_key_b64
+        Settings(
+            _env_file=None, remote_config_signing_private_key_b64=value
+        ).remote_config_signing_private_key_b64
         is None
     )
 

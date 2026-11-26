@@ -61,7 +61,10 @@ async def get_remote_config(
         return Response(status_code=204)
     etag = f'"config-{config.revision}"'
     if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers={"ETag": etag})
+        return Response(
+            status_code=304,
+            headers={"ETag": etag, "Cache-Control": "private, no-cache"},
+        )
     signed = SignedConfig(
         config.revision,
         _aware(config.issued_at),

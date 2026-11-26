@@ -64,7 +64,6 @@ FIELD_REGISTRY: tuple[FieldDefinition, ...] = (
     FieldDefinition(1, "crash", "java_crash", "processName", "string", None, "medium", False, True),
     FieldDefinition(1, "anr", "anr_detected", "anrSource", "string", None, "low", False, True),
     FieldDefinition(1, "anr", "anr_detected", "anrCause", "string", None, "low", False, True),
-    FieldDefinition(1, "anr", "anr_detected", "durationMs", "number", "ms", "low", False, True),
     FieldDefinition(1, "anr", "anr_detected", "processName", "string", None, "medium", False, True),
     FieldDefinition(
         1, "anr", "anr_detected", "mainThreadStack", "string", None, "sensitive", True, False
@@ -85,42 +84,6 @@ FIELD_REGISTRY: tuple[FieldDefinition, ...] = (
         1, "crash", "app_exit", "description", "string", None, "sensitive", True, False
     ),
     FieldDefinition(1, "crash", "app_exit", "trace", "string", None, "sensitive", True, False),
-    FieldDefinition(1, "core", "sdk_health", "emitCount", "integer", "events", "low", False, True),
-    FieldDefinition(1, "core", "sdk_health", "dropCount", "integer", "events", "low", False, True),
-    FieldDefinition(1, "core", "sdk_health", "dropRate", "number", "ratio", "low", False, True),
-    FieldDefinition(1, "core", "sdk_health", "queueSize", "integer", "events", "low", False, True),
-    FieldDefinition(1, "core", "sdk_health", "queueBytes", "integer", "bytes", "low", False, True),
-    FieldDefinition(
-        1, "core", "sdk_health", "avgUploadLatencyMs", "number", "ms", "low", False, True
-    ),
-    FieldDefinition(
-        1, "core", "sdk_health", "maxUploadLatencyMs", "number", "ms", "low", False, True
-    ),
-    FieldDefinition(
-        1, "core", "sdk_health", "internalErrorCount", "integer", "events", "low", False, True
-    ),
-    FieldDefinition(
-        1,
-        "core",
-        "sdk_health",
-        "diagnosticDroppedCount",
-        "integer",
-        "events",
-        "low",
-        False,
-        True,
-    ),
-    FieldDefinition(
-        1,
-        "core",
-        "sdk_health",
-        "diagnosticWriteFailureCount",
-        "integer",
-        "events",
-        "low",
-        False,
-        True,
-    ),
 )
 
 FIELD_REGISTRY += tuple(
@@ -170,10 +133,6 @@ FIELD_REGISTRY += tuple(
         ("backtrace", "string", None, "sensitive", True, False),
         ("faultAddr", "string", None, "sensitive", True, False),
     )
-)
-FIELD_REGISTRY += tuple(
-    FieldDefinition(1, "gc_monitor", "memory_churn", field, "boolean", None, "low", False, True)
-    for field in ("gcCountersAvailable", "allocationRateAvailable", "reclaimRateAvailable")
 )
 
 _REGISTRY_BY_EVENT: dict[tuple[str, str], tuple[FieldDefinition, ...]] = {}
@@ -352,7 +311,11 @@ def _incident_fingerprint(
     if event.name in {"native_crash", "tombstone_crash"}:
         return _native_fingerprint(event, native_frames)
     evidence = next(
-        (str(event.fields[field]) for field in _STACK_FIELDS[event_key] if event.fields.get(field)),
+        (
+            str(event.fields[field])
+            for field in _STACK_FIELDS[event_key]
+            if event.fields.get(field) and str(event.fields[field]).strip()
+        ),
         "",
     )
     if not evidence:

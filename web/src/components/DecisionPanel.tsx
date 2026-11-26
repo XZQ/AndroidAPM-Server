@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 
-import { formatDateTime, formatPercent } from "../format";
+import { formatDateTime, formatMetric, formatPercent } from "../format";
+import { StateBadge } from "./StateBadge";
 import type {
   QueryScope,
   ReleaseDecision,
@@ -37,7 +38,9 @@ export function DecisionPanel({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!await onSubmit(decision, reason)) return;
+    const trimmed = reason.trim();
+    if (trimmed.length < 10) return;
+    if (!await onSubmit(decision, trimmed)) return;
     setReason("");
     setConfirmed(false);
   }
@@ -94,7 +97,7 @@ export function DecisionPanel({
           <button
             className={`primary-button action-${decision}`}
             type="submit"
-            disabled={submitting || !confirmed || reason.length < 10}
+            disabled={submitting || !confirmed || reason.trim().length < 10}
           >
             {submitting ? "正在提交审计记录…" : `记录“${DECISION_LABELS[decision]}”`}
           </button>
@@ -104,15 +107,15 @@ export function DecisionPanel({
           <dl>
             <div>
               <dt>发布状态</dt>
-              <dd>{release.state}</dd>
+              <dd><StateBadge state={release.state} /></dd>
             </div>
             <div>
               <dt>Java Crash</dt>
-              <dd>{release.metrics.javaCrashEvents.value ?? "不可用"}</dd>
+              <dd>{formatMetric(release.metrics.javaCrashEvents)}</dd>
             </div>
             <div>
               <dt>ANR</dt>
-              <dd>{release.metrics.anrEvents.value ?? "不可用"}</dd>
+              <dd>{formatMetric(release.metrics.anrEvents)}</dd>
             </div>
             <div>
               <dt>受影响安装率</dt>

@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal, cast
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import APIRouter, Depends, Query, Request, Response
-from pydantic import Field
+from pydantic import Field, field_validator
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,11 +23,17 @@ from androidapm_server.alerts import (
     evaluate_scope,
     rule_json,
 )
-from androidapm_server.api.query import _audit, _reject_scope_parameters, _validate_window
+from androidapm_server.api.query import (
+    _audit,
+    _reject_scope_parameters,
+    _validate_identifier,
+    _validate_window,
+)
 from androidapm_server.auth import generate_ingest_key
 from androidapm_server.auth_budget import HASH_VERIFIER
 from androidapm_server.ci_auth import generate_ci_key
 from androidapm_server.config import Settings, get_settings
+from androidapm_server.constants import MAX_IDENTIFIER_BYTES
 from androidapm_server.db.models import (
     AlertDelivery,
     AlertInstance,
@@ -139,6 +145,10 @@ async def get_performance(
     """Return exact observation distributions, trends, and release deltas."""
     principal = await _principal(request, response, session, settings)
     _validate_window(from_ms, to_ms, settings)
+    new_release = _validate_identifier(new_release, "newRelease", MAX_IDENTIFIER_BYTES)
+    baseline_release = _validate_identifier(
+        baseline_release, "baselineRelease", MAX_IDENTIFIER_BYTES
+    )
     if new_release == baseline_release:
         raise ApiError(400, "invalid_release_comparison", "The two releases must be different")
     if metric not in PERFORMANCE_BY_ID:
@@ -209,10 +219,15 @@ async def get_alerts(
         .scalars()
         .all()
     )
+    try:
+        channels = list(configured_channels(settings))
+    except ApiError:
+        # Keep rules, episodes, and delivery history readable even when channel JSON is broken.
+        channels = []
     return {
         "rules": [rule_json(rule) for rule in rules],
         "metrics": alert_metric_catalog(),
-        "channels": list(configured_channels(settings)),
+        "channels": channels,
         "historyLimit": MANAGEMENT_LIST_LIMIT,
         "instances": [
             {
@@ -308,7 +323,12 @@ async def edit_rule(
     for key, value in changes.items():
         setattr(rule, key, value)
     if rule.active_instance_id is None:
-        rule.state, rule.last_value, rule.evaluated_at = "NO_DATA", None, None
+        rule.state, rule.last_value, rule.last_sample_count, rule.evaluated_at = (
+            "NO_DATA",
+            None,
+            0,
+            None,
+        )
     _record(session, principal, request, "alert.rule.update", "alert_rule", str(rule.id))
     await session.commit()
     return rule_json(rule)
@@ -381,7 +401,7 @@ async def acknowledge(
         raise ApiError(404, "alert_instance_not_found", "The alert instance was not found")
     if instance.acknowledged_at is None:
         instance.acknowledged_at = datetime.now(UTC)
-        instance.acknowledged_by = principal.key_id
+        instance.acknowledged_by = f"query-key:{principal.key_id}"
         _record(
             session, principal, request, "alert.acknowledge", "alert_instance", str(instance.id)
         )
@@ -393,6 +413,19 @@ class AppSettingsInput(QueryModel):
     """Editable display name; it never changes authorization scope."""
 
     display_name: str = Field(min_length=1, max_length=128)
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str) -> str:
+        """Reject blank or control-character application display names."""
+        trimmed = value.strip()
+        if (
+            not trimmed
+            or len(trimmed.encode("utf-8")) > MAX_IDENTIFIER_BYTES
+            or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in trimmed)
+        ):
+            raise ValueError("displayName must contain printable UTF-8 text")
+        return trimmed
 
 
 @router.put("/v1/manage/settings")
@@ -590,6 +623,10 @@ async def create_key(
         if input.kind == "query":
             common["role"] = input.role
     session.add(model(**common))
+    details: dict[str, Any] = {"role": input.role if input.kind == "query" else None}
+    if input.kind == "ci":
+        # CI keys are app-scoped; omit environment so admins in any environment see the audit.
+        details["environment"] = None
     _record(
         session,
         principal,
@@ -597,7 +634,7 @@ async def create_key(
         "credential.create",
         f"{input.kind}_key",
         key_id,
-        {"role": input.role if input.kind == "query" else None},
+        details,
     )
     await session.commit()
     return {"id": key_id, "secret": plaintext}
@@ -632,8 +669,17 @@ async def revoke_key(
     )
     if row is None:
         raise ApiError(404, "credential_not_found", "The scoped credential was not found")
-    row.active, row.revoked_at = False, datetime.now(UTC)
-    _record(session, principal, request, "credential.revoke", f"{kind}_key", key_id)
+    if row.active or row.revoked_at is None:
+        row.active, row.revoked_at = False, datetime.now(UTC)
+        _record(
+            session,
+            principal,
+            request,
+            "credential.revoke",
+            f"{kind}_key",
+            key_id,
+            {"environment": None} if kind == "ci" else None,
+        )
     await session.commit()
     return {"revoked": True}
 

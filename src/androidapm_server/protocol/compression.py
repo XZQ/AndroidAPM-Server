@@ -26,7 +26,10 @@ def decompress_gzip_bounded(payload: bytes, max_output_bytes: int) -> bytes:
             if len(output) > max_output_bytes or decompressor.unconsumed_tail:
                 raise _payload_too_large()
         remaining = max_output_bytes - len(output)
-        output.extend(decompressor.flush(remaining + 1))
+        # zlib.decompressobj.flush(length) uses length as an initial buffer allocation
+        # size, not a hard cap; bound it to a single chunk so small requests do not
+        # allocate max_output_bytes (8 MiB) on every flush.
+        output.extend(decompressor.flush(max(1, min(remaining + 1, DECOMPRESSION_CHUNK_BYTES))))
     except zlib.error as error:
         raise ApiError(400, "invalid_gzip", "The gzip body is invalid") from error
 

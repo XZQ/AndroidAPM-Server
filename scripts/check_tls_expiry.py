@@ -29,10 +29,13 @@ def remaining_days(not_after: str, now: datetime) -> float:
 
 def fetch_not_after(host: str, port: int, timeout: float) -> str:
     """Return the peer certificate's notAfter value using full TLS verification."""
+    target = host[1:-1] if host.startswith("[") and host.endswith("]") else host
     context = ssl.create_default_context()
-    with socket.create_connection((host, port), timeout=timeout) as raw:
-        with context.wrap_socket(raw, server_hostname=host) as tls:
+    with socket.create_connection((target, port), timeout=timeout) as raw:
+        with context.wrap_socket(raw, server_hostname=target) as tls:
             certificate = tls.getpeercert()
+    if not isinstance(certificate, dict):
+        raise ValueError("peer presented no verifiable certificate")
     value = certificate.get("notAfter")
     if not isinstance(value, str) or not value:
         raise ValueError("peer certificate has no notAfter field")

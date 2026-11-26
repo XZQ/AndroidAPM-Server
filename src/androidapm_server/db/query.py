@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import BigInteger, Integer, Select, and_, case, func, or_, select, text
+from sqlalchemy import BigInteger, Integer, Select, and_, case, func, literal, or_, select, text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.engine import Result, RowMapping
 from sqlalchemy.exc import DBAPIError
@@ -105,8 +105,17 @@ async def load_window_facts(
     release_versions: tuple[str, ...] | None = None,
     fingerprint: str | None = None,
     late_after_ms: int = 900_000,
+    include_installation_id: bool = True,
+    include_session: bool = True,
+    include_session_id: bool = True,
+    include_scene: bool = True,
+    include_bucket: bool = True,
+    include_device_os: bool = True,
+    device_os_presence_only: bool = False,
+    include_envelope_dims: bool = True,
+    include_fingerprint: bool = True,
 ) -> list[QueryFact]:
-    """Reduce filtered events in SQL; bound projection cardinality instead of event volume."""
+    """Reduce filtered events in SQL; project only the dimensions required by the caller."""
     registered = InboxEvent.normalized_json["registered_fields"]
     emit = sql_cast(registered["emitCount"].as_string(), BigInteger)
     drops = sql_cast(registered["dropCount"].as_string(), BigInteger)
@@ -121,70 +130,151 @@ async def load_window_facts(
     late = case(
         (received_ms - InboxEvent.occurrence_timestamp_ms > late_after_ms, True), else_=False
     )
-    bucket = sql_cast(
-        func.floor(
-            (InboxEvent.occurrence_timestamp_ms - from_ms) / query_bucket_ms(from_ms, to_ms)
-        ),
-        Integer,
+    installation_dim = (
+        InboxEvent.installation_hmac
+        if include_installation_id
+        else case((InboxEvent.installation_hmac.is_not(None), "__present__"), else_=None)
     )
-    scene = case(
-        (InboxEvent.raw_pruned_at.is_(None), InboxEvent.payload_json["scene"].as_string()),
-        else_=None,
-    )
-    retained_scene_state = InboxEvent.normalized_json["retention"]["scene_state"].as_string()
-    scene_state = case(
-        (
-            InboxEvent.raw_pruned_at.is_not(None),
-            case(
-                (
-                    retained_scene_state.in_((EVIDENCE_EXPIRED, EVIDENCE_MISSING)),
-                    retained_scene_state,
-                ),
-                else_=EVIDENCE_RETENTION_UNKNOWN,
-            ),
-        ),
-        (and_(scene.is_not(None), scene != ""), EVIDENCE_AVAILABLE),
-        else_=EVIDENCE_MISSING,
-    )
-    dimensions = [
+    dimensions: list[Any] = [
         InboxEvent.app_version.label("app_version"),
         InboxEvent.release_identity_quality.label("release_identity_quality"),
-        InboxEvent.installation_identity_quality.label("installation_identity_quality"),
-        InboxEvent.installation_hmac.label("installation_hmac"),
+        installation_dim.label("installation_hmac"),
         InboxEvent.installation_hmac_key_version.label("installation_hmac_key_version"),
-        InboxEvent.session_identity_quality.label("session_identity_quality"),
-        InboxEvent.session_hmac.label("session_hmac"),
-        InboxEvent.session_hmac_key_version.label("session_hmac_key_version"),
-        InboxEvent.device_model.label("device_model"),
-        InboxEvent.os_version.label("os_version"),
-        case(
-            (
-                and_(
-                    InboxEvent.payload_json["module"].as_string() == "core",
-                    InboxEvent.payload_json["name"].as_string() == "session_start",
-                    InboxEvent.normalized_json["registered_fields"][
-                        "session_schema_version"
-                    ].as_integer()
-                    == 1,
-                    InboxEvent.normalized_json["registered_fields"]["session_count"].as_integer()
-                    == 1,
-                ),
-                True,
-            ),
-            else_=False,
-        ).label("session_start_valid"),
-        InboxEvent.incident_fingerprint.label("incident_fingerprint"),
-        InboxEvent.schema_version.label("schema_version"),
-        InboxEvent.protocol.label("protocol"),
-        InboxEvent.status.label("inbox_status"),
         InboxEvent.payload_json["module"].as_string().label("module"),
         InboxEvent.payload_json["name"].as_string().label("name"),
-        scene.label("scene"),
-        scene_state.label("scene_state"),
         valid_health.label("sdk_emit_count"),
         late.label("late"),
-        bucket.label("bucket"),
     ]
+    static_selects: list[Any] = []
+    if include_session:
+        session_dim = (
+            InboxEvent.session_hmac
+            if include_session_id
+            else case((InboxEvent.session_hmac.is_not(None), "__present__"), else_=None)
+        )
+        dimensions.extend(
+            [
+                InboxEvent.session_identity_quality.label("session_identity_quality"),
+                session_dim.label("session_hmac"),
+                InboxEvent.session_hmac_key_version.label("session_hmac_key_version"),
+                case(
+                    (
+                        and_(
+                            InboxEvent.payload_json["module"].as_string() == "core",
+                            InboxEvent.payload_json["name"].as_string() == "session_start",
+                            sql_cast(
+                                InboxEvent.normalized_json["registered_fields"][
+                                    "session_schema_version"
+                                ].as_string(),
+                                BigInteger,
+                            )
+                            == 1,
+                            sql_cast(
+                                InboxEvent.normalized_json["registered_fields"][
+                                    "session_count"
+                                ].as_string(),
+                                BigInteger,
+                            )
+                            == 1,
+                        ),
+                        True,
+                    ),
+                    else_=False,
+                ).label("session_start_valid"),
+            ]
+        )
+    else:
+        static_selects.extend(
+            [
+                literal("ABSENT").label("session_identity_quality"),
+                literal(None).label("session_hmac"),
+                literal(None).label("session_hmac_key_version"),
+                literal(False).label("session_start_valid"),
+            ]
+        )
+
+    if include_device_os:
+        if device_os_presence_only:
+            dimensions.extend(
+                [
+                    case((InboxEvent.device_model.is_not(None), "__present__"), else_=None).label(
+                        "device_model"
+                    ),
+                    case((InboxEvent.os_version.is_not(None), "__present__"), else_=None).label(
+                        "os_version"
+                    ),
+                ]
+            )
+        else:
+            dimensions.extend(
+                [
+                    InboxEvent.device_model.label("device_model"),
+                    InboxEvent.os_version.label("os_version"),
+                ]
+            )
+    else:
+        static_selects.extend(
+            [
+                literal(None).label("device_model"),
+                literal(None).label("os_version"),
+            ]
+        )
+
+    if include_fingerprint:
+        dimensions.append(InboxEvent.incident_fingerprint.label("incident_fingerprint"))
+    else:
+        static_selects.append(literal(None).label("incident_fingerprint"))
+
+    if include_envelope_dims:
+        dimensions.extend(
+            [
+                InboxEvent.schema_version.label("schema_version"),
+                InboxEvent.protocol.label("protocol"),
+                InboxEvent.status.label("inbox_status"),
+            ]
+        )
+    else:
+        static_selects.extend(
+            [
+                literal("").label("schema_version"),
+                literal("").label("protocol"),
+                literal("").label("inbox_status"),
+            ]
+        )
+
+    if include_scene:
+        scene = case(
+            (InboxEvent.raw_pruned_at.is_(None), InboxEvent.payload_json["scene"].as_string()),
+            else_=None,
+        )
+        retained_scene_state = InboxEvent.normalized_json["retention"]["scene_state"].as_string()
+        scene_state = case(
+            (
+                InboxEvent.raw_pruned_at.is_not(None),
+                case(
+                    (
+                        retained_scene_state.in_((EVIDENCE_EXPIRED, EVIDENCE_MISSING)),
+                        retained_scene_state,
+                    ),
+                    else_=EVIDENCE_RETENTION_UNKNOWN,
+                ),
+            ),
+            (and_(scene.is_not(None), scene != ""), EVIDENCE_AVAILABLE),
+            else_=EVIDENCE_MISSING,
+        )
+        dimensions.extend([scene.label("scene"), scene_state.label("scene_state")])
+    else:
+        static_selects.extend([literal(None).label("scene"), literal(None).label("scene_state")])
+
+    if include_bucket:
+        bucket = sql_cast(
+            func.floor(
+                (InboxEvent.occurrence_timestamp_ms - from_ms) / query_bucket_ms(from_ms, to_ms)
+            ),
+            Integer,
+        )
+        dimensions.append(bucket.label("bucket"))
+
     predicates = list(_scope_window_predicates(principal, from_ms, to_ms))
     if release_versions is not None:
         predicates.append(InboxEvent.app_version.in_(release_versions))
@@ -193,6 +283,7 @@ async def load_window_facts(
     statement = (
         select(
             *dimensions,
+            *static_selects,
             func.min(InboxEvent.id).label("id"),
             func.min(InboxEvent.event_id).label("event_id"),
             func.min(InboxEvent.occurrence_timestamp_ms).label("occurrence_timestamp_ms"),
@@ -211,6 +302,62 @@ async def load_window_facts(
     if len(rows) > max_rows:
         raise _query_budget_exceeded(max_rows)
     return [_fact_from_mapping(row) for row in rows]
+
+
+async def enforce_release_discovery_budget(
+    session: AsyncSession,
+    principal: QueryPrincipal,
+    from_ms: int,
+    to_ms: int,
+    max_rows: int,
+) -> None:
+    """Reject release discovery windows with more eligible events than the scan budget."""
+    bounded = (
+        select(InboxEvent.id)
+        .where(
+            InboxEvent.tenant_id == principal.tenant_id,
+            InboxEvent.app_id == principal.app_id,
+            InboxEvent.environment == principal.environment,
+            InboxEvent.app_version.is_not(None),
+            InboxEvent.app_version != "",
+            InboxEvent.occurrence_timestamp_ms >= from_ms,
+            InboxEvent.occurrence_timestamp_ms < to_ms,
+        )
+        .limit(max_rows + 1)
+        .subquery()
+    )
+    count = (await _execute_bounded(session, select(func.count()).select_from(bounded))).scalar()
+    if (count or 0) > max_rows:
+        raise _query_budget_exceeded(max_rows)
+
+
+async def list_discovered_releases(
+    session: AsyncSession,
+    principal: QueryPrincipal,
+    from_ms: int,
+    to_ms: int,
+    max_rows: int,
+    limit: int,
+) -> list[tuple[str, int]]:
+    """Return bounded release versions ordered by latest occurrence time."""
+    await enforce_release_discovery_budget(session, principal, from_ms, to_ms, max_rows)
+    statement = (
+        select(InboxEvent.app_version, func.count())
+        .where(
+            InboxEvent.tenant_id == principal.tenant_id,
+            InboxEvent.app_id == principal.app_id,
+            InboxEvent.environment == principal.environment,
+            InboxEvent.app_version.is_not(None),
+            InboxEvent.app_version != "",
+            InboxEvent.occurrence_timestamp_ms >= from_ms,
+            InboxEvent.occurrence_timestamp_ms < to_ms,
+        )
+        .group_by(InboxEvent.app_version)
+        .order_by(func.max(InboxEvent.occurrence_timestamp_ms).desc())
+        .limit(limit)
+    )
+    rows = await _execute_bounded(session, statement)
+    return [(row[0] or "", int(row[1])) for row in rows.all()]
 
 
 async def list_scoped_events(
@@ -317,7 +464,7 @@ def _fact_from_mapping(row: RowMapping) -> QueryFact:
         event_id=cast(str, row["event_id"]),
         app_version=cast(str | None, row["app_version"]),
         release_identity_quality=cast(str, row["release_identity_quality"]),
-        installation_identity_quality=cast(str, row["installation_identity_quality"]),
+        installation_identity_quality="ABSENT",
         installation_hmac=cast(str | None, row["installation_hmac"]),
         installation_hmac_key_version=cast(str | None, row["installation_hmac_key_version"]),
         session_identity_quality=cast(str, row["session_identity_quality"]),
@@ -335,7 +482,7 @@ def _fact_from_mapping(row: RowMapping) -> QueryFact:
         module=cast(str | None, row["module"]) or "",
         name=cast(str | None, row["name"]) or "",
         scene=cast(str | None, row["scene"]),
-        scene_state=cast(str, row["scene_state"]),
+        scene_state=cast(str | None, row["scene_state"]),
         sdk_drop_count=_optional_int(row["sdk_drop_count"]),
         sdk_drop_rate=_optional_float(row["sdk_drop_rate"]),
         sdk_emit_count=_optional_int(row["sdk_emit_count"]),

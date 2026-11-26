@@ -65,7 +65,7 @@ export function ExplorePage() {
                 <td><strong>{item.module}/{item.name}</strong><code>{shortId(item.eventId, 8)}</code></td>
                 <td>{item.appVersion ?? "—"}<small>{item.releaseIdentityQuality}</small></td>
                 <td>{item.scene ?? "—"}</td><td>{item.processName ?? "—"}<small>{item.threadName ?? "—"}</small></td>
-                <td>{item.inboxStatus}</td><td><Link to={`${appPath}/events/${encodeURIComponent(item.eventId)}`}><ArrowRight size={16} /></Link></td>
+                <td>{item.inboxStatus}</td><td><Link to={`${appPath}/events/${encodeURIComponent(item.eventId)}`} aria-label={`查看事件 ${item.eventId}`}><ArrowRight size={16} /></Link></td>
               </tr>)}</tbody></table></div>
           )}
           {page.nextCursor !== null ? <button className="console-button secondary load-more" type="button" disabled={loading} onClick={() => void load(page.nextCursor ?? undefined)}>{loading ? "加载中…" : "加载更多"}</button> : null}

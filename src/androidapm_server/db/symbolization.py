@@ -243,6 +243,7 @@ async def resolve_artifact(session: AsyncSession, job: SymbolizationJob) -> Symb
         select(SymbolArtifact).where(
             SymbolArtifact.tenant_id == identity.tenant_id,
             SymbolArtifact.artifact_type == identity.artifact_type,
+            SymbolArtifact.status == ARTIFACT_STATUS_ACTIVE,
             SymbolArtifact.app_id == identity.app_id,
             SymbolArtifact.version_code == identity.version_code,
             SymbolArtifact.app_build == identity.app_build,
@@ -442,7 +443,7 @@ async def requeue_matching_missing_jobs(session: AsyncSession, identity: Artifac
             )
         ).all()
     )
-    changed = 0
+    matched_ids: list[int] = []
     for job in jobs:
         matches = (
             artifact_identity_for_job(job) == identity
@@ -453,22 +454,26 @@ async def requeue_matching_missing_jobs(session: AsyncSession, identity: Artifac
                 for frame in job.inbox_event.native_identity_json
             )
         )
-        if not matches:
-            continue
-        result = await session.execute(
-            update(SymbolizationJob)
-            .where(
-                SymbolizationJob.id == job.id,
-                SymbolizationJob.status == SYMBOL_STATUS_SYMBOLS_MISSING,
-            )
-            .values(
-                status=SYMBOL_STATUS_PENDING,
-                next_attempt_at=utc_now(),
-                last_error_code=None,
-                last_error_message=None,
-            )
+        if matches:
+            matched_ids.append(job.id)
+    if not matched_ids:
+        return 0
+    now = utc_now()
+    result = await session.execute(
+        update(SymbolizationJob)
+        .where(
+            SymbolizationJob.id.in_(matched_ids),
+            SymbolizationJob.status == SYMBOL_STATUS_SYMBOLS_MISSING,
         )
-        changed += int(result.rowcount)  # type: ignore[attr-defined]
+        .values(
+            status=SYMBOL_STATUS_PENDING,
+            next_attempt_at=now,
+            updated_at=now,
+            last_error_code=None,
+            last_error_message=None,
+        )
+    )
+    changed = int(result.rowcount)  # type: ignore[attr-defined]
     await session.flush()
     return changed
 

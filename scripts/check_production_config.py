@@ -82,32 +82,37 @@ def validate(values: dict[str, str]) -> list[str]:
     if values.get("APM_WEB_SESSION_COOKIE_SECURE", "").strip().lower() != "true":
         failures.append("APM_WEB_SESSION_COOKIE_SECURE: must be 'true'")
 
+    decoded_keys: dict[str, bytes] = {}
     for name in ("APM_WEB_SESSION_HMAC_KEY_B64", "APM_QUERY_CURSOR_HMAC_KEY_B64"):
         raw = values.get(name, "")
         if is_placeholder(raw):
             failures.append(f"{name}: missing or example-only value")
         elif (secret := decode_key(raw)) is None or len(secret) < MIN_KEY_BYTES:
             failures.append(f"{name}: must be standard Base64 with >= {MIN_KEY_BYTES} bytes")
+        else:
+            decoded_keys[name] = secret
 
-    _validate_key_ring(values, failures)
+    ring_keys = _validate_key_ring(values, failures)
+    _validate_key_independence(decoded_keys, ring_keys, failures)
     _validate_infrastructure(values, failures)
     return failures
 
 
-def _validate_key_ring(values: dict[str, str], failures: list[str]) -> None:
+def _validate_key_ring(values: dict[str, str], failures: list[str]) -> dict[str, bytes]:
     """Require a non-empty versioned installation HMAC ring with an active version."""
+    decoded: dict[str, bytes] = {}
     raw = values.get("APM_INSTALLATION_HMAC_KEYS_JSON", "")
     if is_placeholder(raw):
         failures.append("APM_INSTALLATION_HMAC_KEYS_JSON: missing or example-only value")
-        return
+        return decoded
     try:
         document = json.loads(raw)
     except json.JSONDecodeError:
         failures.append("APM_INSTALLATION_HMAC_KEYS_JSON: must be valid JSON")
-        return
+        return decoded
     if not isinstance(document, dict) or not document or len(document) > MAX_KEY_VERSIONS:
         failures.append("APM_INSTALLATION_HMAC_KEYS_JSON: must hold 1-16 key versions")
-        return
+        return decoded
     active = values.get("APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION", "v1")
     if active not in document:
         failures.append("APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION: not present in the key ring")
@@ -117,6 +122,29 @@ def _validate_key_ring(values: dict[str, str], failures: list[str]) -> None:
             continue
         if (secret := decode_key(encoded)) is None or len(secret) < MIN_KEY_BYTES:
             failures.append(f"APM_INSTALLATION_HMAC_KEYS_JSON: version '{version}' key is weak")
+        else:
+            decoded[version] = secret
+    return decoded
+
+
+def _validate_key_independence(
+    single_keys: dict[str, bytes],
+    ring_keys: dict[str, bytes],
+    failures: list[str],
+) -> None:
+    """Require independent secrets across session, cursor, and installation HMAC domains."""
+    seen: dict[bytes, str] = {}
+    for name, secret in single_keys.items():
+        if secret in seen:
+            failures.append(f"{name}: must not reuse the same secret as {seen[secret]}")
+        else:
+            seen[secret] = name
+    for version, secret in ring_keys.items():
+        label = f"APM_INSTALLATION_HMAC_KEYS_JSON[{version}]"
+        if secret in seen:
+            failures.append(f"{label}: must not reuse the same secret as {seen[secret]}")
+        else:
+            seen[secret] = label
 
 
 def _validate_infrastructure(values: dict[str, str], failures: list[str]) -> None:

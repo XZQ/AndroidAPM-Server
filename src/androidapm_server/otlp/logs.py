@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
+from datetime import UTC
 from typing import Any
 
 from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest
@@ -26,6 +27,7 @@ from androidapm_server.db.models import InboxEvent
 
 SCOPE_NAME = "androidapm-server"
 SCOPE_VERSION = "0.1.0"
+OTLP_SCHEMA_URL = "https://opentelemetry.io/schemas/1.37.0"
 
 SEVERITY_NUMBERS: dict[str, SeverityNumber.ValueType] = {
     "DEBUG": SEVERITY_NUMBER_DEBUG,
@@ -82,7 +84,7 @@ def _resource_logs(resource_key: tuple[str, ...], events: list[InboxEvent]) -> R
     return ResourceLogs(
         resource=Resource(attributes=_key_values(attributes)),
         scope_logs=[scope_logs],
-        schema_url="https://opentelemetry.io/schemas/1.37.0",
+        schema_url=OTLP_SCHEMA_URL,
     )
 
 
@@ -138,9 +140,14 @@ def _log_record(event: InboxEvent) -> LogRecord:
             attributes["android.apm.symbolization.tool"] = symbolization.tool_name
         if symbolization.tool_version:
             attributes["android.apm.symbolization.tool_version"] = symbolization.tool_version
+    received_at = (
+        event.received_at
+        if event.received_at.tzinfo is not None
+        else event.received_at.replace(tzinfo=UTC)
+    )
     return LogRecord(
         time_unix_nano=(event.occurrence_timestamp_ms or event.event_timestamp_ms) * 1_000_000,
-        observed_time_unix_nano=int(event.received_at.timestamp() * 1_000_000_000),
+        observed_time_unix_nano=int(received_at.timestamp() * 1_000_000_000),
         severity_number=SEVERITY_NUMBERS.get(severity, SEVERITY_NUMBER_UNSPECIFIED),
         severity_text=severity,
         body=_any_value(f"{module}.{name}"),

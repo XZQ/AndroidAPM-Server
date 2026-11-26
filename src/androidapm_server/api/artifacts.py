@@ -155,8 +155,10 @@ async def _upload(
         build_id,
     )
     storage_key = identity.storage_key(staged.checksum_sha256, extension)
+    existed_before = await store.exists(storage_key)
     promoted = await store.promote(staged, storage_key)
     request_id = request.state.request_id
+    registration = None
     try:
         registration = await register_artifact(
             session, identity, staged, storage_key, principal.key_id
@@ -192,12 +194,15 @@ async def _upload(
         )
         await session.commit()
     except Exception:
-        # A failed registration or commit must not leave the promoted immutable file
-        # unreferenced in the private volume. Discard is idempotent; a client retry
-        # re-promotes the same content-derived key. Cleanup never masks the original
-        # failure.
-        with suppress(OSError):
-            await store.discard(promoted)
+        # A failed registration or commit must not leave a newly-promoted immutable file
+        # unreferenced in the private volume, nor delete an already-committed duplicate's
+        # live file on disk. Cleanup never masks the original failure.
+        is_existing_duplicate = (
+            registration is not None and not registration.inserted and not registration.conflict
+        )
+        if not existed_before and not is_existing_duplicate:
+            with suppress(OSError):
+                await store.discard(promoted)
         raise
     return ArtifactAck(
         artifactId=registration.artifact.id,

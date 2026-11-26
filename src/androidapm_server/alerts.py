@@ -10,15 +10,16 @@ from typing import Any, Literal
 
 import httpx
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from androidapm_server.config import Settings, get_settings
 from androidapm_server.db.leases import lease_claim_time, lease_write_time
 from androidapm_server.db.models import AlertDelivery, AlertInstance, AlertRule, Tenant
-from androidapm_server.db.session import get_session_factory
+from androidapm_server.db.session import close_engine, get_session_factory
 from androidapm_server.errors import ApiError
+from androidapm_server.logging import configure_logging
 from androidapm_server.performance import count_window_events, load_observations, summarize
 from androidapm_server.performance_catalog import PERFORMANCE_BY_ID
 from androidapm_server.query import QueryModel
@@ -80,12 +81,36 @@ class AlertRuleInput(QueryModel):
     name: str = Field(min_length=1, max_length=128)
     metric: str = Field(max_length=256)
     comparison: Literal["gt", "lt"] = "gt"
-    threshold: float = Field(ge=0, allow_inf_nan=False)
+    threshold: float = Field(allow_inf_nan=False)
     min_samples: int = Field(default=1, ge=1, le=100_000)
     window_seconds: int = Field(default=900, ge=60, le=86_400)
     release_version: str | None = Field(default=None, min_length=1, max_length=256)
     channel: str | None = Field(default=None, min_length=1, max_length=64)
     enabled: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        """Reject blank or control-character rule names."""
+        trimmed = value.strip()
+        if not trimmed or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in trimmed):
+            raise ValueError("Rule name must contain printable text")
+        return trimmed
+
+    @field_validator("release_version")
+    @classmethod
+    def clean_release_version(cls, value: str | None) -> str | None:
+        """Enforce the same trimmed printable 256-byte bound as query identifiers."""
+        if value is None:
+            return None
+        if (
+            not value
+            or value != value.strip()
+            or len(value.encode("utf-8")) > 256
+            or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
+        ):
+            raise ValueError("releaseVersion must contain 1-256 trimmed printable UTF-8 bytes")
+        return value
 
     @field_validator("metric")
     @classmethod
@@ -96,6 +121,24 @@ class AlertRuleInput(QueryModel):
         ):
             raise ValueError("Unknown alert metric")
         return value
+
+    @model_validator(mode="after")
+    def validate_threshold_domain(self) -> AlertRuleInput:
+        """Allow signed thresholds only for signed metric units (ratio_delta, http_status)."""
+        unit = (
+            PERFORMANCE_BY_ID[self.metric.removesuffix(".p95")].unit
+            if self.metric.endswith(".p95")
+            else "events"
+        )
+        if unit == "ratio_delta":
+            if not -1.0 <= self.threshold <= 1.0:
+                raise ValueError("ratio_delta threshold must be between -1 and 1")
+        elif unit == "http_status":
+            if self.threshold < -1:
+                raise ValueError("http_status threshold must be >= -1")
+        elif self.threshold < 0:
+            raise ValueError("threshold must be >= 0 for non-negative metrics")
+        return self
 
 
 def as_utc(value: datetime) -> datetime:
@@ -154,6 +197,7 @@ async def evaluate_rule(
         # Empty telemetry is unknown coverage, not proof that incidents recovered.
         value = float(count) if samples else None
     else:
+        field = PERFORMANCE_BY_ID[rule.metric.removesuffix(".p95")]
         rows = await load_observations(
             session,
             principal,
@@ -161,10 +205,10 @@ async def evaluate_rule(
             from_ms,
             to_ms,
             (rule.release_version,) if rule.release_version else None,
+            event=(field.module, field.name),
+            occurrence_only=rule.release_version is not None,
         )
-        if rule.release_version is not None:
-            rows = [row for row in rows if row["release_identity_quality"] == "OCCURRENCE_BOUND"]
-        observation = summarize(rows, PERFORMANCE_BY_ID[rule.metric.removesuffix(".p95")])
+        observation = summarize(rows, field)
         samples = observation.sample_count
         value = observation.p95 if observation.coverage == 1 else None
     rule.last_value = value
@@ -234,6 +278,8 @@ async def evaluate_scope(
     settings: Settings,
     principal: QueryPrincipal,
     now: datetime | None = None,
+    *,
+    isolate_budget_errors: bool = False,
 ) -> int:
     """Serialize automatic and manual evaluation with the same tenant row lock."""
     # PostgreSQL locks cross-process; SQLite serializes local writers through this update.
@@ -253,9 +299,25 @@ async def evaluate_scope(
             .limit(ALERT_RULE_LIMIT)
         )
     ).all()
+    evaluated = 0
     for rule in rules:
-        await evaluate_rule(session, rule, settings, now or datetime.now(UTC))
-    return len(rules)
+        try:
+            await evaluate_rule(session, rule, settings, now or datetime.now(UTC))
+            evaluated += 1
+        except ApiError as error:
+            if isolate_budget_errors and error.code == "query_row_limit":
+                # Keep one budget-blocked p95 rule from rolling back sibling rules
+                # (such as SQL count rules) in the same scope.
+                logger.warning(
+                    "alert_evaluation_budget_blocked",
+                    tenant_id=principal.tenant_id,
+                    app_id=principal.app_id,
+                    environment=principal.environment,
+                    rule_id=rule.id,
+                )
+                continue
+            raise
+    return evaluated
 
 
 async def deliver_once(
@@ -286,7 +348,7 @@ async def deliver_once(
                 lease_expires_at=None,
             )
         )
-        candidate = await session.scalar(
+        candidate_stmt = (
             select(AlertDelivery.id)
             .where(
                 *claimable,
@@ -295,6 +357,9 @@ async def deliver_once(
             .order_by(AlertDelivery.id)
             .limit(1)
         )
+        if session.bind is not None and session.bind.dialect.name == "postgresql":
+            candidate_stmt = candidate_stmt.with_for_update(skip_locked=True)
+        candidate = await session.scalar(candidate_stmt)
         if candidate is None:
             await session.commit()
             return bool(exhausted.rowcount)  # type: ignore[attr-defined]
@@ -380,60 +445,69 @@ async def deliver_once(
 async def alert_loop() -> None:
     """Run independently of OTLP availability; preserve failing scope/outbox work."""
     settings = get_settings()
+    configure_logging(settings.log_level)
     factory = get_session_factory()
-    async with httpx.AsyncClient() as client:
-        while True:
-            try:
-                async with factory() as session:
-                    scopes = (
-                        await session.execute(
-                            select(
-                                AlertRule.tenant_id,
-                                AlertRule.app_id,
-                                AlertRule.environment,
+    try:
+        async with httpx.AsyncClient() as client:
+            while True:
+                try:
+                    async with factory() as session:
+                        scopes = (
+                            await session.execute(
+                                select(
+                                    AlertRule.tenant_id,
+                                    AlertRule.app_id,
+                                    AlertRule.environment,
+                                )
+                                .join(Tenant, Tenant.id == AlertRule.tenant_id)
+                                .where(
+                                    AlertRule.enabled.is_(True),
+                                    Tenant.active.is_(True),
+                                )
+                                .distinct()
                             )
-                            .join(Tenant, Tenant.id == AlertRule.tenant_id)
-                            .where(
-                                AlertRule.enabled.is_(True),
-                                Tenant.active.is_(True),
-                            )
-                            .distinct()
-                        )
-                    ).all()
-                for tenant, app, environment in scopes:
-                    try:
-                        async with factory() as session:
-                            await evaluate_scope(
-                                session,
-                                settings,
-                                QueryPrincipal(
-                                    tenant, "alert-worker", app, environment, "viewer", None
-                                ),
-                            )
-                            await session.commit()
-                    except ApiError as error:
-                        if error.code == "query_row_limit":
-                            # p95 rules still project rows: a budget-blocked window keeps
-                            # existing episodes unchanged (fail closed) but must stay
-                            # operationally visible instead of degrading silently.
+                        ).all()
+                    for tenant, app, environment in scopes:
+                        try:
+                            async with factory() as session:
+                                await evaluate_scope(
+                                    session,
+                                    settings,
+                                    QueryPrincipal(
+                                        tenant, "alert-worker", app, environment, "viewer", None
+                                    ),
+                                    isolate_budget_errors=True,
+                                )
+                                await session.commit()
+                        except ApiError as error:
+                            if error.code == "query_row_limit":
+                                # p95 rules still project rows: a budget-blocked window keeps
+                                # existing episodes unchanged (fail closed) but must stay
+                                # operationally visible instead of degrading silently.
+                                logger.warning(
+                                    "alert_evaluation_budget_blocked",
+                                    tenant_id=tenant,
+                                    app_id=app,
+                                    environment=environment,
+                                )
+                            else:
+                                logger.warning("alert_scope_evaluation_failed", tenant_id=tenant)
+                        except Exception:
                             logger.warning(
-                                "alert_evaluation_budget_blocked",
+                                "alert_scope_evaluation_failed",
                                 tenant_id=tenant,
-                                app_id=app,
-                                environment=environment,
+                                exc_info=True,
                             )
-                        else:
-                            logger.warning("alert_scope_evaluation_failed", tenant_id=tenant)
-                    except Exception:
-                        logger.warning("alert_scope_evaluation_failed", tenant_id=tenant)
-                for _ in range(100):
-                    if not await deliver_once(factory, settings, client):
-                        break
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.warning("alert_cycle_failed")
-            await asyncio.sleep(settings.alert_poll_seconds)
+                    for _ in range(100):
+                        if not await deliver_once(factory, settings, client):
+                            break
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.warning("alert_cycle_failed", exc_info=True)
+                await asyncio.sleep(settings.alert_poll_seconds)
+    finally:
+        await close_engine()
 
 
 def run() -> None:

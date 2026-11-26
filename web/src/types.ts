@@ -75,6 +75,8 @@ export interface ReleaseHealth {
   baselineRelease: ReleaseSlice;
   comparison: {
     javaCrashEventDelta: number | null;
+    nativeCrashEventDelta?: number | null;
+    nativeTombstoneEventDelta?: number | null;
     anrEventDelta: number | null;
     affectedInstallationDelta: number | null;
     affectedInstallationRatioDelta: number | null;
@@ -86,8 +88,12 @@ export interface ReleaseTrendPoint {
   bucketStartMs: number;
   bucketEndMs: number;
   newJavaCrashEvents: number | null;
+  newNativeCrashEvents?: number | null;
+  newNativeTombstoneEvents?: number | null;
   newAnrEvents: number | null;
   baselineJavaCrashEvents: number | null;
+  baselineNativeCrashEvents?: number | null;
+  baselineNativeTombstoneEvents?: number | null;
   baselineAnrEvents: number | null;
   newState: QueryState;
   baselineState: QueryState;
@@ -117,7 +123,6 @@ export interface Fingerprints {
 export interface ReleaseSummaryItem {
   releaseVersion: string;
   eventCount: number;
-  hasData: boolean;
 }
 
 export interface ReleaseList {
@@ -261,6 +266,8 @@ export interface ReleaseEvidence {
   releaseState: string;
   baselineState: string | null;
   javaCrashEvents: number | null;
+  nativeCrashEvents?: number | null;
+  nativeTombstoneEvents?: number | null;
   anrEvents: number | null;
   affectedInstallations: number | null;
   activeInstallations: number | null;
@@ -308,4 +315,5 @@ export interface ApiErrorBody {
   code?: string;
   message?: string;
   retryable?: boolean;
+  detail?: string | { msg?: string }[];
 }

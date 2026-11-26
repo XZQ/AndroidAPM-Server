@@ -87,6 +87,7 @@ async def query_api() -> AsyncIterator[
             yield session
 
     settings = Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         environment="test",
         installation_hmac_keys_json=TEST_HMAC_KEYS_JSON,
@@ -791,13 +792,22 @@ async def test_scope_parameters_limits_windows_and_row_budget_are_enforced(
         ]
         await insert_batch(session, _metadata("tenant-a"), events, key_ring)
         await session.commit()
+    # Release health tracks per-installation identities, so >100 distinct installations
+    # exceed the group budget while data-quality collapses high-cardinality IDs to presence.
     budget = await client.get(
+        "/v1/query/release-health",
+        headers=auth(credentials["viewer-a"]),
+        params=window_params(newRelease="3.0.0", baselineRelease="2.0.0"),
+    )
+    assert budget.status_code == 422
+    assert budget.json()["code"] == "query_budget_exceeded"
+    quality_unfiltered = await client.get(
         "/v1/query/data-quality",
         headers=auth(credentials["viewer-a"]),
         params=window_params(),
     )
-    assert budget.status_code == 422
-    assert budget.json()["code"] == "query_budget_exceeded"
+    assert quality_unfiltered.status_code == 200
+    assert quality_unfiltered.json()["sampleCount"] == 105
     filtered = await client.get(
         "/v1/query/data-quality",
         headers=auth(credentials["viewer-a"]),
@@ -814,6 +824,93 @@ async def test_scope_parameters_limits_windows_and_row_budget_are_enforced(
     assert len(page.json()["items"]) == 3
 
 
+async def test_release_discovery_enforces_scoped_occurrence_row_budget(
+    query_api: tuple[
+        AsyncClient, async_sessionmaker[AsyncSession], dict[str, str], InstallationHmacKeyRing
+    ],
+) -> None:
+    client, factory, credentials, key_ring = query_api
+    app = client._transport.app
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None,
+        environment="test",
+        installation_hmac_keys_json=TEST_HMAC_KEYS_JSON,
+        query_cursor_hmac_key_b64=TEST_CURSOR_KEY_B64,
+        query_max_rows=100,
+        query_max_limit=100,
+    )
+    async with factory() as session:
+        await insert_batch(
+            session,
+            _metadata("tenant-a"),
+            [
+                _event(
+                    f"release-budget-{index}",
+                    "core",
+                    "sdk_health",
+                    {},
+                    "8.0.0",
+                    f"install-{index}",
+                )
+                for index in range(101)
+            ],
+            key_ring,
+        )
+        await insert_batch(
+            session,
+            _metadata("tenant-b"),
+            [_event("release-budget-other", "core", "sdk_health", {}, "9.0.0", "install-x")],
+            key_ring,
+        )
+        await session.commit()
+
+    over_budget = await client.get(
+        "/v1/query/releases",
+        headers=auth(credentials["viewer-a"]),
+        params=window_params(),
+    )
+    assert over_budget.status_code == 422
+    assert over_budget.json()["code"] == "query_budget_exceeded"
+
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None,
+        environment="test",
+        installation_hmac_keys_json=TEST_HMAC_KEYS_JSON,
+        query_cursor_hmac_key_b64=TEST_CURSOR_KEY_B64,
+        query_max_rows=100,
+        query_max_limit=100,
+    )
+    async with factory() as session:
+        await session.execute(
+            update(InboxEvent)
+            .where(InboxEvent.event_id.like("release-budget-%"))
+            .values(occurrence_timestamp_ms=FROM_MS - 1)
+        )
+        await session.execute(
+            update(InboxEvent)
+            .where(InboxEvent.event_id == "release-budget-0")
+            .values(
+                occurrence_timestamp_ms=NOW_MS,
+                event_timestamp_ms=FROM_MS - 1,
+            )
+        )
+        await session.commit()
+    result = await client.get(
+        "/v1/query/releases",
+        headers=auth(credentials["viewer-a"]),
+        params=window_params(),
+    )
+    assert result.status_code == 200, result.text
+    assert {item["releaseVersion"] for item in result.json()["items"]} == {
+        "1.0.0",
+        "2.0.0",
+        "3.0.0",
+        "4.0.0",
+        "8.0.0",
+    }
+
+
+@pytest.mark.asyncio
 async def test_sql_reduction_counts_more_events_than_the_projection_budget(
     query_api: tuple[
         AsyncClient, async_sessionmaker[AsyncSession], dict[str, str], InstallationHmacKeyRing
@@ -929,6 +1026,7 @@ async def test_query_credential_audience_and_missing_cursor_key_fail_closed(
 
     app = client._transport.app  # type: ignore[attr-defined]
     app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         environment="test",
         installation_hmac_keys_json=TEST_HMAC_KEYS_JSON,

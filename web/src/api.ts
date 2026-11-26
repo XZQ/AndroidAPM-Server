@@ -25,10 +25,15 @@ export class ApiFailure extends Error {
   readonly retryable: boolean;
 
   constructor(status: number, body: ApiErrorBody) {
-    super(body.message ?? `请求失败（HTTP ${status}）`);
+    const detailMessage = Array.isArray(body.detail)
+      ? body.detail.map((item) => item.msg).filter(Boolean).join("；")
+      : typeof body.detail === "string"
+        ? body.detail
+        : undefined;
+    super(body.message ?? (detailMessage || `请求失败（HTTP ${status}）`));
     this.name = "ApiFailure";
     this.status = status;
-    this.code = body.code ?? "unknown_error";
+    this.code = body.code ?? (status === 422 && detailMessage ? "validation_error" : "unknown_error");
     this.requestId = body.requestId;
     this.retryable = body.retryable ?? false;
   }

@@ -37,7 +37,7 @@ export function OverviewPage() {
       const found = discovery[0].value.items.map((item) => item.releaseVersion);
       if (found.length > 0 && !found.includes(filters.newRelease)) {
         const next = found[0] ?? filters.newRelease;
-        const baseline = found.includes(filters.baselineRelease)
+        const baseline = found.includes(filters.baselineRelease) && filters.baselineRelease !== next
           ? filters.baselineRelease
           : (found.find((version) => version !== next) ?? `${next}-baseline`);
         setFilters((currentFilters) => (
@@ -65,7 +65,6 @@ export function OverviewPage() {
       return;
     }
     if (healthResult.status === "fulfilled") setHealth(healthResult.value);
-    else setError(handleFailure(healthResult.reason, "发布健康查询失败"));
     if (qualityResult.status === "fulfilled") setQuality(qualityResult.value);
     if (fingerprintResult.status === "fulfilled") setFingerprints(fingerprintResult.value);
     setLoading(false);
@@ -106,7 +105,13 @@ export function OverviewPage() {
         <label>当前版本<input value={newRelease} onChange={(event) => setNewRelease(event.target.value)} /></label>
         <span>对比</span>
         <label>基线版本<input value={baselineRelease} onChange={(event) => setBaselineRelease(event.target.value)} /></label>
-        <button className="console-button primary" type="submit" disabled={newRelease.trim() === baselineRelease.trim()}>应用对比</button>
+        <button
+          className="console-button primary"
+          type="submit"
+          disabled={!newRelease.trim() || !baselineRelease.trim() || newRelease.trim() === baselineRelease.trim()}
+        >
+          应用对比
+        </button>
         <small>范围：{formatDateTime(filters.fromMs)} — {formatDateTime(filters.toMs)}</small>
       </form>
 
@@ -123,8 +128,8 @@ export function OverviewPage() {
 
       <section className="console-metric-row" aria-label="发布关键指标">
         <MetricTile label="Java Crash" metric={health.newRelease.metrics.javaCrashEvents} delta={health.comparison.javaCrashEventDelta} />
-        {health.newRelease.metrics.nativeCrashEvents && <MetricTile label="Native Crash" metric={health.newRelease.metrics.nativeCrashEvents} />}
-        {health.newRelease.metrics.nativeTombstoneEvents && <MetricTile label="历史 Tombstone" metric={health.newRelease.metrics.nativeTombstoneEvents} />}
+        {health.newRelease.metrics.nativeCrashEvents && <MetricTile label="Native Crash" metric={health.newRelease.metrics.nativeCrashEvents} delta={health.comparison.nativeCrashEventDelta ?? null} />}
+        {health.newRelease.metrics.nativeTombstoneEvents && <MetricTile label="历史 Tombstone" metric={health.newRelease.metrics.nativeTombstoneEvents} delta={health.comparison.nativeTombstoneEventDelta ?? null} />}
         <MetricTile label="ANR" metric={health.newRelease.metrics.anrEvents} delta={health.comparison.anrEventDelta} />
         <MetricTile label="受影响安装" metric={health.newRelease.metrics.affectedInstallations} delta={health.comparison.affectedInstallationDelta} />
         <MetricTile label="活跃安装" metric={health.newRelease.metrics.activeInstallations} />
@@ -176,7 +181,7 @@ export function OverviewPage() {
                     <td>{item.eventCount}</td>
                     <td>{item.affectedInstallationCount ?? "—"}</td>
                     <td>{formatDateTime(item.firstSeenMs)}<small>{formatDateTime(item.lastSeenMs)}</small></td>
-                    <td><Link aria-label={`查看 ${item.eventFamily} 详情`} to={`${appPath}/issues/${item.fingerprint}`}><ArrowRight size={16} /></Link></td>
+                    <td><Link aria-label={`查看 ${item.eventFamily} 详情`} to={`${appPath}/issues/${encodeURIComponent(item.fingerprint)}`}><ArrowRight size={16} /></Link></td>
                   </tr>
                 ))}
               </tbody>

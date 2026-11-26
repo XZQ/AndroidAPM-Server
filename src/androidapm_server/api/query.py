@@ -6,18 +6,19 @@ import re
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from androidapm_server.config import Settings, get_settings
 from androidapm_server.constants import (
     MAX_IDENTIFIER_BYTES,
+    MAX_RELEASE_VERSIONS,
     QUERY_RAW_PURPOSES,
     QUERY_RELEASE_DECISIONS,
 )
-from androidapm_server.db.models import AuditLog, InboxEvent, ReleaseDecision
+from androidapm_server.db.models import AuditLog, ReleaseDecision
 from androidapm_server.db.query import (
     get_scoped_event,
+    list_discovered_releases,
     list_release_decisions,
     list_scoped_events,
     load_window_facts,
@@ -94,6 +95,9 @@ async def get_release_health(
         settings.query_max_rows,
         release_versions=(new_release, baseline_release),
         late_after_ms=settings.query_late_after_seconds * 1000,
+        include_scene=False,
+        include_device_os=False,
+        include_envelope_dims=False,
     )
     _no_store(response)
     return build_release_health(
@@ -135,6 +139,11 @@ async def get_top_fingerprints(
         settings.query_max_rows,
         release_versions=(release_version,),
         late_after_ms=settings.query_late_after_seconds * 1000,
+        include_session=False,
+        include_scene=False,
+        include_bucket=False,
+        include_device_os=False,
+        include_envelope_dims=False,
     )
     _no_store(response)
     return build_top_fingerprints(
@@ -176,6 +185,8 @@ async def get_issue_detail(
         settings.query_max_rows,
         fingerprint=validated_fingerprint,
         late_after_ms=settings.query_late_after_seconds * 1000,
+        include_session=False,
+        include_envelope_dims=False,
     )
     _no_store(response)
     return build_issue_detail(
@@ -214,6 +225,12 @@ async def get_data_quality(
         settings.query_max_rows,
         release_versions=(release_version,) if release_version is not None else None,
         late_after_ms=settings.query_late_after_seconds * 1000,
+        include_installation_id=False,
+        include_session_id=False,
+        include_scene=False,
+        include_bucket=False,
+        device_os_presence_only=True,
+        include_fingerprint=False,
     )
     _no_store(response)
     return build_data_quality(
@@ -495,24 +512,17 @@ async def get_releases(
     _reject_scope_parameters(request)
     principal = await authenticate_query_request(session, request, settings)
     _validate_window(from_ms, to_ms, settings)
-    rows = await session.execute(
-        select(InboxEvent.app_version, func.count())
-        .where(
-            InboxEvent.tenant_id == principal.tenant_id,
-            InboxEvent.app_id == principal.app_id,
-            InboxEvent.environment == principal.environment,
-            InboxEvent.app_version.is_not(None),
-            InboxEvent.app_version != "",
-            InboxEvent.event_timestamp_ms >= from_ms,
-            InboxEvent.event_timestamp_ms < to_ms,
-        )
-        .group_by(InboxEvent.app_version)
-        .order_by(func.max(InboxEvent.event_timestamp_ms).desc())
-        .limit(50)
+    rows = await list_discovered_releases(
+        session,
+        principal,
+        from_ms,
+        to_ms,
+        settings.query_max_rows,
+        MAX_RELEASE_VERSIONS,
     )
     releases = [
-        ReleaseSummary(release_version=row[0] or "", event_count=row[1], has_data=True)
-        for row in rows.all()
+        ReleaseSummary(release_version=release_version, event_count=event_count)
+        for release_version, event_count in rows
     ]
     _no_store(response)
     return ReleaseListResponse(

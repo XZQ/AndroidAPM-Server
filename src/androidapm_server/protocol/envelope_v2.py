@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from androidapm_server.constants import (
     MAX_IDENTIFIER_BYTES,
+    MAX_MAP_ENTRIES,
     SCHEMA_VERSION_V2,
     SDK_NAME,
     V2_BATCH_ID_HASH_BYTES,
@@ -143,6 +144,8 @@ def _to_event(
             "V2 events must use typed_fields instead of legacy fields",
             event_index,
         )
+    if len(message.typed_fields) > MAX_MAP_ENTRIES:
+        raise _invalid_event(f"map exceeds {MAX_MAP_ENTRIES} entries", event_index)
     fields: dict[str, object] = {}
     field_types: dict[str, str] = {}
     try:
